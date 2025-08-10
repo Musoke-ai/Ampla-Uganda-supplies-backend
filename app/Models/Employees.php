@@ -4,17 +4,16 @@ namespace App\Models;
 
 use CodeIgniter\Model;
 
-class Stock extends Model
+class Employees extends Model
 {
     protected $DBGroup          = 'default';
-    protected $table            = 'stock';
-    protected $primaryKey       = 'stockId';
+    protected $table            = 'employees';
+    protected $primaryKey       = 'empID';
     protected $useAutoIncrement = true;
-    // protected $returnType       = 'object';
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['stockItem','stockOwner', 'stockItemQuantity', 'oldStock'];
+    protected $allowedFields    = ['empName', 'empEmail', 'empLocation', 'empContact','empRole','empSalary', 'empStatus',"startDate","endDate"];
 
     // Dates
     protected $useTimestamps = false;

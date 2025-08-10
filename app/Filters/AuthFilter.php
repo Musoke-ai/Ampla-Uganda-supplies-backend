@@ -6,6 +6,8 @@ use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
 
+use App\Services\ValidateToken;
+
 class AuthFilter implements FilterInterface
 {
     /**
@@ -23,11 +25,45 @@ class AuthFilter implements FilterInterface
      *
      * @return mixed
      */
+
+    protected $validate_token;
+
+    public function __construct()
+    {
+        $this->validate_token = new ValidateToken();
+    }
+
     public function before(RequestInterface $request, $arguments = null)
     {
-        helper("auth");
-        if (!auth("tokens")->loggedIn()){
-            return redirect()->to(base_url("api/invalid-access"));
+        // $valid_token = $this->validate_token->validation();
+
+        // if ($valid_token ) {
+        //     return redirect()->to(base_url("api/invalid-access"));
+        // }
+        // helper("auth");
+        // if (!auth("tokens")->loggedIn()){
+        //     return redirect()->to(base_url("api/invalid-access"));
+        // }
+
+
+        $authHeader = $request->getHeader('Authorization');
+
+        if ($authHeader) {
+            $authHeader = $authHeader->getValue();
+
+            if (preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+                $token = $matches[1];
+                // You can now validate the token or perform further actions
+
+                $valid_token = $this->validate_token->validation($token);
+
+                if (!$valid_token) {
+                    return redirect()->to(base_url("api/invalid-access"));
+                }
+
+                // return redirect()->to(base_url("api/invalid-access"));
+                return;
+            }
         }
     }
 

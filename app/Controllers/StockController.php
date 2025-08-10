@@ -27,7 +27,6 @@ class StockController extends ResourceController
             'message' => 'There is nothing in the stock table. Add new stock and try again.'
         ];
         return $this->respond($response);
-        exit();
     }
 
      // return resource object for validation failure
@@ -38,7 +37,6 @@ class StockController extends ResourceController
             'message' => $this->validator->getErrors()
         ];
         return $this->respond($response);
-        exit();
     }
 
     /**
@@ -60,7 +58,6 @@ class StockController extends ResourceController
                 'message' => 'Success!! items have been fetched to your front end.' 
             ];
             return $this->respond($stockData);
-            exit();
         }
     }
 
@@ -77,11 +74,7 @@ class StockController extends ResourceController
                $data = [
                'stockItem' => $this->request->getVar('stockItem'),
                'stockItemQuantity' => $this->request->getVar('stockItemQuantity'),
-               'oldStock' => $this->request->getVar('oldStock'),
-               'stockItemPrice' => $this->request->getVar('stockItemPrice'),
-               'itemSellingPrice' => $this->request->getVar('itemSellingPrice'),
-               'itemSupplier' => $this->request->getVar('itemSupplier'),
-               
+               'oldStock' => $this->request->getVar('oldStock'),         
            ];
         $insertQuery =  $stockData =  $this->stockModel->insert($data);
         if(empty($insertQuery)){
@@ -91,16 +84,22 @@ class StockController extends ResourceController
                 'message' => 'Item not added in the stock and error occured or check all fields and try again!'
             ];
             return $this->respond($response);
-            exit();
         }
         else{
+             $payload = [
+                'stockId' => null,
+                'message' => 'Stock created' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('stock-channel', 'stock-created', $payload);
             $response = [
                 'status' => true,
                 'error' => 'null',
                 'message' => 'Item(s) successfully added in the stock. 3'
             ];
             return $this->respond($response);
-            exit();
         }
  
 }
@@ -111,7 +110,6 @@ else{
         'message' => 'The request method is not post set it to post and try again.'
     ];
     return $this->respond($response);
-    exit();
 }
     }
 
@@ -182,7 +180,6 @@ else{
         // in case a category is found
         else{
             return $this->respond($data);
-            exit();
         }
     }
 
@@ -215,17 +212,23 @@ else{
                     'message' => 'Fail! Category update failed. Follow the right procedures and try again in 10 minutes.'
                 ];
                 return $this->respond($response);
-                exit();
             }
             // in case category update succeeds
             else{
+                       $payload = [
+                'stockId' => null,
+                'message' => 'Stock updated' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('stock-channel', 'stock-updated', $payload);
                 $response =  [
                     'status' => true,
                     'error' => null,
-                    'message' => 'Success!! Category has been updated'
+                    'message' => 'Success!! Stock has been updated'
                 ];
                 return $this->respond($response);
-                exit();
             }
         }
     }
@@ -253,17 +256,23 @@ else{
                     'message' => 'Fail! Category has not been deleted. Make sure everything is right and try again in 10 minutes.'
                 ];
                 return $this->respond($response);
-                exit();
             }
             // in case selected category was deleted
             else{
+                       $payload = [
+                'stockId' => null,
+                'message' => 'Stock deleted' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('stock-channel', 'stock-deleted', $payload);
                 $response = [
                     'status' => true,
                     'error' => null,
-                    'message' => 'Success!! Selected category has been deleted.'
+                    'message' => 'Success!! Selected stock has been deleted.'
                 ];
                 return $this->respond($response);
-                exit();
             }
         }
     }

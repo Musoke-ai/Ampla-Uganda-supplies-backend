@@ -24,6 +24,7 @@ class Database extends Config
     /**
      * The default database connection.
      */
+    //for development only
     public array $default = [
         'DSN'          => '',
         'hostname'     => 'localhost',
@@ -45,6 +46,7 @@ class Database extends Config
         'numberNative' => false,
     ];
 
+    //for production only
     // public array $default = [
     //     'DSN'          => '',
     //     'hostname'     => 'localhost',

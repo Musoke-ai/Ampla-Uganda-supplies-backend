@@ -4,17 +4,16 @@ namespace App\Models;
 
 use CodeIgniter\Model;
 
-class Stock extends Model
+class Expense extends Model
 {
     protected $DBGroup          = 'default';
-    protected $table            = 'stock';
-    protected $primaryKey       = 'stockId';
+    protected $table            = 'expenses';
+    protected $primaryKey       = 'id';
     protected $useAutoIncrement = true;
-    // protected $returnType       = 'object';
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['stockItem','stockOwner', 'stockItemQuantity', 'oldStock'];
+    protected $allowedFields    = ['category', 'description', 'amount', 'givenTo','remarks', 'expenseDateCreated', 'expenseDateUpdated',"expenseDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;

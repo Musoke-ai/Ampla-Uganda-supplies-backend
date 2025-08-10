@@ -4,17 +4,16 @@ namespace App\Models;
 
 use CodeIgniter\Model;
 
-class Stock extends Model
+class ProductRegister extends Model
 {
     protected $DBGroup          = 'default';
-    protected $table            = 'stock';
-    protected $primaryKey       = 'stockId';
+    protected $table            = 'daily_products_register';
+    protected $primaryKey       = 'id';
     protected $useAutoIncrement = true;
-    // protected $returnType       = 'object';
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['stockItem','stockOwner', 'stockItemQuantity', 'oldStock'];
+    protected $allowedFields    = ['prodId', 'quantity', 'initials', 'dailyProductionDateCreated', 'dailyProductionDateUpdated',"dailyProductionDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;

@@ -1,13 +1,14 @@
 <?php
 
 namespace Config;
+//rndp oqig ovsn capj
 
 use CodeIgniter\Config\BaseConfig;
 
 class Email extends BaseConfig
 {
-    // public string $fromEmail  = 'support@poweredStock.com';
-    // public string $fromName   = 'poweredStock.com';
+    // public string $fromEmail  = 'hmusoke9@gmail.com';
+    // public string $fromName   = 'CodeIgniter SMTP';
     // public string $recipients = '';
 
     /**
@@ -18,7 +19,7 @@ class Email extends BaseConfig
     /**
      * The mail sending protocol: mail, sendmail, smtp
      */
-    public string $protocol = 'mail';
+    public string $protocol = 'smtp';
 
     /**
      * The server path to Sendmail.
@@ -28,23 +29,24 @@ class Email extends BaseConfig
     /**
      * SMTP Server Address
      */
-    public string $SMTPHost = 'mail.poweredstock.com';
+    public string $SMTPHost = 'smtp.gmail.com';
 
     /**
      * SMTP Username
      */
-    public string $SMTPUser = 'support@poweredStock.com';
+    public string $SMTPUser = 'hmusoke9@gmail.com';
 
     /**
      * SMTP Password
      */
-    public string $SMTPPass = '';
+    public string $SMTPPass = 'rndpoqigovsncapj';
     // public string $SMTPPass = 'KiicSN7kB66v69X';
 
     /**
      * SMTP Port
      */
-    public int $SMTPPort = 25;
+    //public int $SMTPPort = 25;
+    public int $SMTPPort = 587;
 
     /**
      * SMTP Timeout (in seconds)
@@ -63,7 +65,8 @@ class Email extends BaseConfig
      *             to the server. 'ssl' means implicit SSL. Connection on port
      *             465 should set this to ''.
      */
-    public string $SMTPCrypto = 'ssl';
+    //public string $SMTPCrypto = 'ssl';
+    public string $SMTPCrypto = 'tls';
 
     /**
      * Enable word-wrap
@@ -78,7 +81,7 @@ class Email extends BaseConfig
     /**
      * Type of mail, either 'text' or 'html'
      */
-    public string $mailType = 'text';
+    public string $mailType = 'html';
 
     /**
      * Character set (utf-8, iso-8859-1, etc.)

@@ -4,17 +4,16 @@ namespace App\Models;
 
 use CodeIgniter\Model;
 
-class Stock extends Model
+class RawMaterials extends Model
 {
     protected $DBGroup          = 'default';
-    protected $table            = 'stock';
-    protected $primaryKey       = 'stockId';
+    protected $table            = 'raw_materials';
+    protected $primaryKey       = 'materialId';
     protected $useAutoIncrement = true;
-    // protected $returnType       = 'object';
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['stockItem','stockOwner', 'stockItemQuantity', 'oldStock'];
+    protected $allowedFields    = ['name', 'size', 'Quantity', 'unitPrice','supplier', 'note', 'expiry', 'rawMaterialDateCreated', 'rawMaterialDateUpdated',"rawMaterialDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;

@@ -17,14 +17,14 @@ use CodeIgniter\Shield\Entities\User;
 
 class Entries extends ResourceController
 {
-     /** This controller will hold the following functions
-      * Check presence of administrators' data
-      * Validation check
-      * CRUD stock
-      * Sales recording
-      * Indebt recording
-      * Overall statistics recording
-      * In the addition to the update of stock funcns, itemBuyPrice and itemSalePrice have been merged to make itemLeastPrice(amount an owner can sell an item at the minimum)
+    /** This controller will hold the following functions
+     * Check presence of administrators' data
+     * Validation check
+     * CRUD stock
+     * Sales recording
+     * Indebt recording
+     * Overall statistics recording
+     * In the addition to the update of stock funcns, itemBuyPrice and itemSalePrice have been merged to make itemLeastPrice(amount an owner can sell an item at the minimum)
      **/
 
     private $inventoryModel;
@@ -38,7 +38,8 @@ class Entries extends ResourceController
     private $receiptModel;
 
 
-    public function __construct(){
+    public function __construct()
+    {
         $this->inventoryModel = new Inventory();
         $this->statisticsModel = new Statistics();
         $this->businessModel = new Business();
@@ -50,7 +51,8 @@ class Entries extends ResourceController
         $this->receiptModel = new Receipt();
     }
 
-    private function nostockdata(){
+    private function nostockdata()
+    {
         //check presence of admin data
         $response = [
             'status' => false,
@@ -60,15 +62,15 @@ class Entries extends ResourceController
         return $this->respond($response);
     }
 
-     // return resource object for validation failure
-    public function validationFail(){
+    // return resource object for validation failure
+    public function validationFail()
+    {
         $response = [
             'status' => false,
             'error' => 'validationError',
             'message' => $this->validator->getErrors()
         ];
         return $this->respond($response);
-        exit();
     }
 
     /**
@@ -85,77 +87,109 @@ class Entries extends ResourceController
             'To' => 'Musoke Hamzah',
             'Message' => 'Hello Mr. Musoke, this is how our API based CodeIgniter returns data, hope it is the one you expected.'
         ];
-        if(empty($data)){
+        if (empty($data)) {
             return $this->nostockdata();
-        }
-        else{
+        } else {
             return $this->respond($data);
-            exit();
-    }
+        }
     }
 
+    //Enter new stock quantites
     public function addStock()
     {
         $userId = auth()->id();
-        $data = [];
-        if($this->request->getMethod() === 'post'){
-               $data = [
-               'stockOwner' => $userId,
-               'stockItem' => $this->request->getVar('stockItem'),
-               'oldStock' => $this->request->getVar('oldStock'),
-               'stockItemQuantity' => $this->request->getVar('stockItemQuantity'),
-               'stockItemPrice' => $this->request->getVar('stockItemPrice'),
-               'itemSellingPrice' => $this->request->getVar('itemSellingPrice'),
-               'itemSupplier' => $this->request->getVar('itemSupplier'),
-               
-           ];
-        $insertQuery =  $this->stockModel->insert($data);
-        if(empty($insertQuery)){
-            $response = [
-                'status' => false,
-                'error' => 'StockItemFail',
-                'message' => 'Item not added in the stock and error occured or check all fields and try again!'
-            ];
-            return $this->respond($response);
-            exit();
-        }
-        else{
-            $item = $this->inventoryModel->find($this->request->getVar('stockItem'));
-            $newQuantity =  $item['itemQuantity'] + $this->request->getVar('stockItemQuantity');
-            $this->inventoryModel->set('itemQuantity',$newQuantity);
-            $this->inventoryModel->where('itemId',$this->request->getVar('stockItem'));
-            $updateInventoryItem = $this->inventoryModel->update();
-            if($updateInventoryItem){
-                $response = [
-                    'status' => true,
-                    'error' => 'null',
-                    'message' => 'Item(s) successfully added in the stock.'
-                ];
-                $this->recordStat($this->request->getVar('stockItem'), 'addStock', NULL);
-                return $this->respond($response);
-                exit();
-            }else{
+        // $data = [];
+        if ($this->request->getMethod() === 'post') {
+            // $stockItems = $this->request->getVar('stockItems');
+            $stockItems = $this->request->getVar('stockItems');
+               if (empty($stockItems)) {
                 $response = [
                     'status' => false,
-                    'error' => 'null',
-                    'message' => 'Inventory not updated.'
+                    'error' => 'Stock Items List Empty',
+                    'message' => 'Stock Items list is empty add an item or items and try again!'
                 ];
                 return $this->respond($response);
-                exit();
-            }
-           
-        }
- 
-}
-else{
-    $response = [
-        'status' => false,
-        'error' => 'RequestMethodError',
-        'message' => 'The request method is not post set it to post and try again.'
+            }else{
+
+                $batchData = [];
+                $batchUpdateData = [];
+
+               foreach ($stockItems as $item) {
+                
+      $batchData[] = [
+        'stockOwner'        => $userId,
+        'stockItem'         => $item->stockItem,
+        'oldStock'          => $item->oldStock,
+        'stockItemQuantity' => $item->stockItemQuantity,
+        'stockItemPrice'    => $item->itemStockPrice,
+        'itemSellingPrice'  => $item->itemLeastPrice,
+        'itemSupplier'      => 'none',
     ];
-    return $this->respond($response);
-    exit();
-}
+        $batchUpdateData[] = [
+        'itemId'         => $item->stockItem,
+        'itemQuantity' => (int)$item->stockItemQuantity + (int)$item->oldStock,
+    ];
+               }
+
+
+               // Insert all at once
+$insertBatchQuery = $this->stockModel->insertBatch($batchData);
+ if (empty($insertBatchQuery)) {
+                $response = [
+                    'status' => false,
+                    'error' => 'StockItemFail',
+                    'message' => 'Item not added in the stock and error occured or check all fields and try again!'
+                ];
+                return $this->respond($response);
+            } else {
+                // $item = $this->inventoryModel->find($this->request->getVar('stockItem'));
+                // $newQuantity =  $item['itemQuantity'] + $this->request->getVar('stockItemQuantity');
+                // $this->inventoryModel->set('itemQuantity', $newQuantity);
+                // $this->inventoryModel->where('itemId', $this->request->getVar('stockItem'));
+                // Update all rows where `id` matches
+                $updateInventoryItems = $this->inventoryModel->updateBatch($batchUpdateData, 'itemId');
+                // $updateInventoryItem = $this->inventoryModel->update();
+                if ($updateInventoryItems) {
+                      $payload = [
+                'stockId' => null,
+                'message' => 'Stock added' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'stock-added', $payload);
+                    $response = [
+                        'status' => true,
+                        'error' => 'null',
+                        'itemsUpdated' => $updateInventoryItems,
+                        'iems2' => $batchUpdateData,
+                        'items' => $batchData,
+                        'stock' => $stockItems,
+                        'message' => 'Item(s) successfully added in the stock.'
+                    ];
+                    // $this->recordStat($this->request->getVar('stockItem'), 'addStock', NULL);
+                    return $this->respond($response);
+                } else {
+                    $response = [
+                        'status' => false,
+                        'error' => 'null',
+                        'message' => 'Inventory not updated.'
+                    ];
+                    return $this->respond($response);
+                    // exit();
+                }
+            }
+
+               }
+            }
+        else {
+            $response = [
+                'status' => false,
+                'error' => 'RequestMethodError',
+                'message' => 'The request method is not post set it to post and try again.'
+            ];
+            return $this->respond($response);
+        }
     }
 
     /**
@@ -168,7 +202,7 @@ else{
     {
         $userId = auth()->id();
         //handle & submit stock form entries
-        if($this->request->getMethod() === 'post'){
+        if ($this->request->getMethod() === 'post') {
             $stockData = [
                 'itemName' => $this->request->getVar('item_name'),
                 'itemCategoryId' => $this->request->getVar('item_category'),
@@ -186,26 +220,33 @@ else{
             $saveStock = $this->inventoryModel->save($stockData);
 
             // is stock data saved?? 
-            if($saveStock){
+            if ($saveStock) {
                 $data = $this->inventoryModel->where('itemOwner', $userId)->orderBy('itemId', 'DESC')->find();
                 $item_id = $data[0]['itemId'];
                 $historyData = [
                     'historyItemId' => $item_id,
                     'busId' => $userId,
                     'historyAction' => 'New item added',
-                    'historyDetails' => $this->request->getVar('item_quantity')." items",
+                    'historyDetails' => $this->request->getVar('item_quantity') . " items",
                 ];
-    
-                $saveHistoryData = $this->historyModel->save($historyData);
 
+                $saveHistoryData = $this->historyModel->save($historyData);
+     $payload = [
+                'stockId' => null,
+                'message' => 'Stock created' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'stock-created', $payload);
                 $response = [
                     'status' => true,
                     'error' => null,
                     'Message' => 'Success!, a new item has been added to existing stock'
                 ];
                 $this->recordStat(NULL, 'createStock', NULL);
-                     // stock entry history handling
-                if(!$saveHistoryData){
+                // stock entry history handling
+                if (!$saveHistoryData) {
                     $response = [
                         'status' => false,
                         'error' => 'historyUploadFailed',
@@ -213,33 +254,27 @@ else{
                     ];
 
                     return $this->respond($response);
-                    exit();
                 }
                 // in case upload & it's history were recorded ok 
-                else{
-                     $response = [
+                else {
+                    $response = [
                         'status' => true,
                         'error' => null,
                         'Messages' => 'Action history has been recorded successfully.'
                     ];
                     return $this->respond($response);
-                    exit();
                 }
 
-                return $this->respond($response);
-                exit();
-            }
-            else{
+                // return $this->respond($response);
+            } else {
                 $response = [
                     'status' => false,
                     'error' => 'itemUploadFailed',
                     'Messages' => 'Fail!! New item creation could not be fully processed, check your form entries and try again, please'
                 ];
                 return $this->respond($response);
-                exit();
             }
-        }
-        else{
+        } else {
             return $this->validationFail();
         }
     }
@@ -254,11 +289,9 @@ else{
         //fetch item to edit
         $data = $this->inventoryModel->find($id);
 
-        if($data){
+        if ($data) {
             return $this->respond($data);
-            exit();
-        }
-        else{
+        } else {
             return $this->nostockdata();
         }
     }
@@ -275,80 +308,83 @@ else{
         $id = $this->request->getVar('itemId');
         $data = $this->inventoryModel->find($id);
 
-        if(empty($data)){
+        if (empty($data)) {
             // return $this->nostockdata();
             return $this->respond($id);
-            exit();
         }
         // in case data to update is available //&& $this->validateStockEntries('updateitem')
-        else{
-            if($this->request->getMethod() === 'post' && $this->validateStockEntries('updateitem') ){
-             $updateStock=[];
+        else {
+            if ($this->request->getMethod() === 'post' && $this->validateStockEntries('updateitem')) {
+                $updateStock = [];
                 $stockDataUpdate = [
-                'itemName' => $this->request->getVar('item_name'),
-                'itemCategoryId' => $this->request->getVar('item_category'),
-                'itemModel' => $this->request->getVar('item_model'),
-                'itemQuality' => $this->request->getVar('item_quality'),
-                'itemQuantity' => $this->request->getVar('item_quantity'),
-                'itemCondition' => $this->request->getVar('item_condition'),
-                'itemSize' => $this->request->getVar('item_size'),
-                'itemStockPrice' => $this->request->getVar('item_stock_price'),
-                'itemLeastPrice' => $this->request->getVar('item_min_price'),
-                'itemNotes' => $this->request->getVar('item_notes'),
-                'itemOwner' => $userId,
+                    'itemName' => $this->request->getVar('item_name'),
+                    'itemCategoryId' => $this->request->getVar('item_category'),
+                    'itemModel' => $this->request->getVar('item_model'),
+                    'itemQuality' => $this->request->getVar('item_quality'),
+                    'itemQuantity' => $this->request->getVar('item_quantity'),
+                    'itemCondition' => $this->request->getVar('item_condition'),
+                    'itemSize' => $this->request->getVar('item_size'),
+                    'itemStockPrice' => $this->request->getVar('item_stock_price'),
+                    'itemLeastPrice' => $this->request->getVar('item_min_price'),
+                    'itemNotes' => $this->request->getVar('item_notes'),
+                    'itemOwner' => $userId,
+                ];
+
+                $historyData = [
+                    'historyItemId' => $id,
+                    'historyAction' => 'Updated an item',
+                    'historyDetails' => ''
+                ];
+
+                $updateStock = $this->inventoryModel->update($id, $stockDataUpdate);
+
+                if ($updateStock) {
+                    $saveHistoryData = $this->historyModel->save($historyData);
+
+                    // stock entry history handling
+                    if (!$saveHistoryData) {
+                        $response = [
+                            'status' => false,
+                            'error' => 'historyUpdateFailed',
+                            'Message' => 'Fail!! Item update was successful, but your action history was not recorded. But this is OK though you should report it and get it fixed.'
+                        ];
+                        return $this->respond($response);
+                    }
+                    // in case history was recorded ok 
+                    else {
+                             $payload = [
+                'itemId' => $id,
+                'message' => 'Item updated' 
             ];
 
-            $historyData = [
-                'historyItemId' => $id,
-                'historyAction' => 'Updated an item',
-                'historyDetails' => ''
-            ];
-
-            $updateStock = $this->inventoryModel->update($id, $stockDataUpdate);
-
-            if($updateStock){
-                $saveHistoryData = $this->historyModel->save($historyData);
-                
-                // stock entry history handling
-                if(!$saveHistoryData){
-                    $response = [
-                        'status' => false,
-                        'error' => 'historyUpdateFailed',
-                        'Message' => 'Fail!! Item update was successful, but your action history was not recorded. But this is OK though you should report it and get it fixed.'
-                    ];
-                    return $this->respond($response);
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'item-updated', $payload);
+                        $response = [
+                            'status' => true,
+                            'error' => null,
+                            'Message' => 'Item has been updated.'
+                        ];
+                        return $this->respond($response);
+                        // exit();
+                    }
+                    $this->recordStat($id, 'update', NULL);
                     exit();
                 }
-                // in case history was recorded ok 
-                else{
-                     $response = [
-                        'status' => true,
-                        'error' => null,
-                        'Message' => 'Item has been updated.'
+                // in case item update fails
+                else {
+                    $response = [
+                        'status' => false,
+                        'error' => 'updateFail',
+                        'message' => 'We could not update this item, make sure everything is right and try again',
+                        'Data'    =>  $stockDataUpdate
                     ];
                     return $this->respond($response);
-                    // exit();
                 }
-                $this->recordStat($id,'update',NULL);
-                exit();
-
             }
-            // in case item update fails
-            else{
-                $response = [
-                    'status' => false,
-                    'error' => 'updateFail',
-                    'message' => 'We could not update this item, make sure everything is right and try again',
-                    'Data'    =>  $stockDataUpdate
-                ];
-                return $this->respond($response);
-                exit();
-            }
-
-        }
-        // in case form validation fails 
-            else{
-               return $this->validationFail();
+            // in case form validation fails 
+            else {
+                return $this->validationFail();
             }
         }
     }
@@ -358,287 +394,365 @@ else{
      *
      * @return mixed
      */
-    public function saleStock($items = null){
+    public function saleStock($items = null)
+    {
         $userId = auth()->id();
-        if($this->request->getMethod() === 'post' && $this->validateStockEntries('sellitem')){
+        if ($this->request->getMethod() === 'post' && $this->validateStockEntries('sellitem')) {
             return $this->validationFail();
-        }else{
+        } else {
 
-    //   $items = json_decode($items,true);//true is passed to make a real php array not an object
-      $items = $this->request->getVar('saleItems');//true is passed to make a real php array not an object
-      $limit = sizeof($items);
-      //Check wether there is items to sell or not
-      if(empty($items)){
-        $response = [
-            'status' => false,
-            'error' => 'ItemsListEmpty',
-            'message' => 'Items list is empty add an item or items to make a complete transaction'
-        ];
-        return $this->respond($response);
-        exit();
-      }else{
-
-      $saleData = $items;
-      $items_sold = [];//To store all ids of the sold item for history store
-      $updateItems = [];
-            $saveSaleData = $this->salesModel->insertBatch($saleData);
-            if(empty($saveSaleData)){
+            //   $items = json_decode($items,true);//true is passed to make a real php array not an object
+            $items = $this->request->getVar('saleItems'); //true is passed to make a real php array not an object
+            $saleDetails = $this->request->getVar('saleDetails'); //true is passed to make a real php array not an object
+            $limit = sizeof($items);
+            //Check wether there is items to sell or not
+            if (empty($items)) {
                 $response = [
                     'status' => false,
-                    'error' => 'SalesTransactionFailed',
-                    'message' => 'Sales Transaction Failed'
+                    'error' => 'ItemsListEmpty',
+                    'message' => 'Items list is empty add an item or items to make a complete transaction'
                 ];
                 return $this->respond($response);
-                exit();
-            }
-            else{
-                //Create and Record sale transactionId/timeStamp in the receipt table
-                $timeStamp = uniqid('RS-',true);
-                $rcptdata = [
-                    'timeStamp' => $timeStamp
-                ];
+            } else {
 
-                // Reflect back / update quantity changes after sales in the stock table
-                // $updateStock = $this->inventoryModel->updateBatch($saleData, 'itemId');
-                // if($updateStock){
+                $saleData = $items;
+                $items_sold = []; //To store all ids of the sold item for history store
+                $updateItems = [];
+                $saveSaleData = $this->salesModel->insertBatch($saleData);
+                if (empty($saveSaleData)) {
+                    $response = [
+                        'status' => false,
+                        'error' => 'SalesTransactionFailed',
+                        'message' => 'Sales Transaction Failed'
+                    ];
+                    return $this->respond($response);
+                } else {
+                    //Create and Record sale transactionId/timeStamp in the receipt table
+                    $timeStamp = uniqid('RS-', true);
+                    $rcptdata = [
+                        'timeStamp' => $timeStamp,
+                        'discount' => $saleDetails->discount,
+                        'dueAmount' => $saleDetails->dueAmount,
+                        'moreInfo' => $saleDetails->moreInfo,
+                        'paymentMethod' => $saleDetails->paymentMethod,
+                        'amountPaid' => $saleDetails->tenderedAmount,
+                    ];
+
+                    // Reflect back / update quantity changes after sales in the stock table
+                    // $updateStock = $this->inventoryModel->updateBatch($saleData, 'itemId');
+                    // if($updateStock){
                     $this->recordStat(NULL, 'saleStock', $limit);
-                   //Convert the payload properly into an array for proper iteration
-                    $items = json_encode($items);//payload to json string
-                    $items = json_decode($items,true);//payload to an array
+                    //Convert the payload properly into an array for proper iteration
+                    $items = json_encode($items); //payload to json string
+                    $items = json_decode($items, true); //payload to an array
                     $itemSize = sizeof($items);
                     //find the last sizeof($items) from the sales table
                     $getSaleIds = $this->salesModel->orderBy('saleDateCreated', 'desc')->findAll($itemSize);
-                    $receiptNo = $this->receiptModel->insert($rcptdata,true);
+                    
+                    $receiptNo = $this->receiptModel->insert($rcptdata, true);
+                    //record dues to indebt table for this sale
+                    if($saleDetails->dueAmount > 0){
+  $indebtData = [
+                // 'indebtItemId' => $this->request->getVar('indebtItemId'),
+                'indebtOwner' =>  $userId,
+                // 'quantityDebted' => $this->request->getVar('quantityDebted'),
+                'totalAmount' =>    $saleDetails->total,
+                'initialDeposit' => $saleDetails->tenderedAmount,
+                'endDate' => $saleDetails->endDate,
+                'custId' => $saleDetails->custId,
+                'SR_ID' =>  $receiptNo
+            ];
+             $saveIndebtData = $this->indebtModel->save($indebtData);
+                    }
                     //Attach receiptNumber to each sale
-                    foreach($getSaleIds as $sale => $key){
-                    $this->salesModel->set('SR_ID',$receiptNo);
-                    $this->salesModel->where('saleId',$key['saleId']);
-                    $this->salesModel->update();
+                    foreach ($getSaleIds as $sale => $key) {
+                        $this->salesModel->set('SR_ID', $receiptNo);
+                        $this->salesModel->where('saleId', $key['saleId']);
+                        $this->salesModel->update();
                     };
-//Update item quantity in the inventory table
-                    foreach($getSaleIds as $sale => $key){
-                      $item = $this->inventoryModel->find($key['saleItemId']);
-                      $itemQty = $item['itemQuantity'] - $key['saleQuantity'];
-                      $this->inventoryModel->set('itemQuantity', $itemQty);
-                      $this->inventoryModel->where('itemId', $key['saleItemId']);
-                      $this->inventoryModel->update();
+                    //Update item quantity in the inventory table
+                    foreach ($getSaleIds as $sale => $key) {
+                        $item = $this->inventoryModel->find($key['saleItemId']);
+                        $itemQty = $item['itemQuantity'] - $key['saleQuantity'];
+                        $this->inventoryModel->set('itemQuantity', $itemQty);
+                        $this->inventoryModel->where('itemId', $key['saleItemId']);
+                        $this->inventoryModel->update();
                     }
 
- //Get all item ids into the history for save
-                    foreach($items as $item => $key){
-                        foreach($getSaleIds as $sale => $saleKey){ 
+                    //Get all item ids into the history for save
+                    foreach ($items as $item => $key) {
+                        foreach ($getSaleIds as $sale => $saleKey) {
 
-                            if($key['saleItemId'] == $saleKey['saleItemId']) {
+                            if ($key['saleItemId'] == $saleKey['saleItemId']) {
                                 $history = [
                                     'historyItemId' => $key['saleItemId'],
                                     'busId'         => $userId,
-                                    'historyAction' => 'Item sold',
-                                    'historyDetails' => $items[0]['custName']." ".$items[0]['custContacts']
+                                    'historyAction' => $items[0]['saleQuantity'].' Item(s) sold',
+                                    'historyDetails' => $items[0]['custId']
                                 ];
                                 array_push($items_sold, $history);
-                            } 
+                            }
                         }
-}
- $saveHistoryData = $this->historyModel->insertBatch($items_sold);
- if($saveHistoryData){
-     $response = [
-                        'status' => true,
-                        'error' => 'null',
-                        'receiptNumber'=>$receiptNo,
-                        'message' => 'transaction completed successfully'
-                    ];
-                    return $this->respond($response);
-                    exit();
- }else {
-     $response = [
-                        'status' => false,
-                        'error' => 'History Save error',
-                        'message' => 'Sales history not saved, you need to report this error imediatetly to our team!'
-                    ];
-                    return $this->respond($response);
-                    exit();
- }
-                // }        
-        }
+                    }
+                    $saveHistoryData = $this->historyModel->insertBatch($items_sold);
+                    if ($saveHistoryData) {
+                             $payload = [
+                'saleId' => null,
+                'message' => 'Sale created' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'sale-created', $payload);
+                        $response = [
+                            'status' => true,
+                            'error' => 'null',
+                            'receiptNumber' => $receiptNo,
+                            'message' => 'transaction completed successfully'
+                        ];
+                        return $this->respond($response);
+                    } else {
+                        $response = [
+                            'status' => false,
+                            'error' => 'History Save error',
+                            'message' => 'Sales history not saved, you need to report this error immediately to our team!'
+                        ];
+                        return $this->respond($response);
+                    }
+                    // }        
+                }
             }
         }
     }
 
-public function updateSales(){
-
-}
-
-    public function cancelSale(){
+    public function updateSales() {
         $userId = auth()->id();
-        $receiptNumner = $this->request->getVar('SR_ID');
-        $this->salesModel->where('SR_ID',$receiptNumner);
-        $this->salesModel->where('saleOwner',$userId);
-        $sales = $this->salesModel->findAll(); 
-        
+        $receiptNumber = $this->request->getVar('SR_ID');
+        $this->salesModel->where('SR_ID', $receiptNumber);
+        $this->salesModel->where('saleOwner', $userId);
+        $sales = $this->salesModel->findAll();
+
         //Update item quantity in the inventory table
-        foreach($sales as $sale => $key){
+        foreach ($sales as $sale => $key) {
             $item = $this->inventoryModel->find($key['saleItemId']);
             $itemQty = $item['itemQuantity'] + $key['saleQuantity'];
             $this->inventoryModel->set('itemQuantity', $itemQty);
             $this->inventoryModel->where('itemId', $key['saleItemId']);
             $this->inventoryModel->update();
-          }
+        }
 
-          //Finally delete the sales from the sales table
-          $this->salesModel->where('saleOwner',$userId);
-          $this->salesModel->where('SR_ID',$receiptNumner);
-          $delete = $this->salesModel->delete();
-          print_r($delete);
-          if($delete){
+        //Finally delete the sales from the sales table
+        $this->salesModel->where('saleOwner', $userId);
+        $this->salesModel->where('SR_ID', $receiptNumber);
+        $delete = $this->salesModel->delete();
+        print_r($delete);
+        if ($delete) {
             $response = [
                 'status' => true,
                 'error' => null,
                 'message' => 'Sales deleted successfully'
             ];
             return $this->respond($response);
-            exit();
-          }else{
+        } else {
             $response = [
                 'status' => false,
                 'error' => 'Sale deletion error',
                 'message' => 'Sales deletion not , you need to report this error imediatetly to our team!'
             ];
             return $this->respond($response);
-            exit();
-          }
+        }
     }
 
-     /**
+    public function cancelSale()
+    {
+        $userId = auth()->id();
+        $receiptNumber = $this->request->getVar('SR_ID');
+        $this->salesModel->where('SR_ID', $receiptNumber);
+        $this->salesModel->where('saleOwner', $userId);
+        $sales = $this->salesModel->findAll();
+
+        //Update item quantity in the inventory table
+        foreach ($sales as $sale => $key) {
+            $item = $this->inventoryModel->find($key['saleItemId']);
+            $itemQty = $item['itemQuantity'] + $key['saleQuantity'];
+            $this->inventoryModel->set('itemQuantity', $itemQty);
+            $this->inventoryModel->where('itemId', $key['saleItemId']);
+            $this->inventoryModel->update();
+        }
+
+        //Finally delete the sales from the sales table
+        $this->salesModel->where('saleOwner', $userId);
+        $this->salesModel->where('SR_ID', $receiptNumber);
+        $delete = $this->salesModel->delete();
+        print_r($delete);
+        if ($delete) {
+                 $payload = [
+                'saleId' => $receiptNumber,
+                'message' => 'Sale deleted' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'sale-deleted', $payload);
+            $response = [
+                'status' => true,
+                'error' => null,
+                'message' => 'Sales deleted successfully'
+            ];
+            return $this->respond($response);
+        } else {
+            $response = [
+                'status' => false,
+                'error' => 'Sale deletion error',
+                'message' => 'Sales deletion not , you need to report this error imediatetly to our team!'
+            ];
+            return $this->respond($response);
+        }
+    }
+
+    /**
      * Update a record in the sales table
      *
      * @return mixed
      */
-    public function createDebt(){
+    public function createDebt($debtData=null)
+    {
         $userId = auth()->id();
+        $dbReceipt = null;
         $indebtData = [];
-        if($this->request->getMethod() === 'post'){ 
-
-        $indebtData = [
-'indebtItemId' => $this->request->getVar('indebtItemId'),
-'indebtOwner' =>  $userId,
-'quantityDebted'=> $this->request->getVar('quantityDebted'),
-'atPrice' =>    $this->request->getVar('atPrice'),
-'initialDeposit' =>$this->request->getVar('initialDeposit'),
-'totalAmount' => $this->request->getVar('totalAmount'),
-'endDate' => $this->request->getVar('endDate'),
-'custName' => $this->request->getVar('custName'),
-'custContact' => $this->request->getVar('custContact'),
-'custEmail' => $this->request->getVar('custEmail'),
-'custLocation' => $this->request->getVar('custLocation'),
-];
-
-$saveIndebtData = $this->indebtModel->save($indebtData);
-if($saveIndebtData){
-    //update item Quantity in the inventory table
-    $item = $this->inventoryModel->find($this->request->getVar('indebtItemId'));
-    $itemQty = $item['itemQuantity'] -  $this->request->getVar('quantityDebted');
-    $this->inventoryModel->set('itemQuantity', $itemQty);
-    $this->inventoryModel->where('itemId', $this->request->getVar('indebtItemId'));
-    $this->inventoryModel->update();
-    $response = [
-                'status' => true,
-                'error' => 'null',
-                'message' => 'Your item(s) have been added to your debts. To setup your alerts and client SMS notifications, please visit the Alerts and Notification panel...!'
+        if ($this->request->getMethod() === 'post') {
+            //Create and Record debt transactionId/timeStamp in the receipt table
+            $timeStamp = uniqid('DBT-', true);
+            $rcptdata = [
+                'timeStamp' => $timeStamp
             ];
-            $this->recordStat($this->request->getVar('indebtItemId'),'addDebt', NULL);
-            return $this->respond($response);
-            exit();
-}else{
-    $response = [
-                'status' => false,
-                'error' => 'debtNotAdded',
-                'message' => 'Fail! We could not process your debt order now. Check all entries and try again!'
-            ];
-            return $this->respond($response);
-            exit();
-}
+            $receiptNo = $this->receiptModel->insert($rcptdata, true);
 
+            if($receiptNo){
+                $dbReceipt = $receiptNo;
+            }
+            else{
+                $response = [
+                    'status' => false,
+                    'error' => 'RecieptInssertionError',
+                    'message' => 'TID inssertion failed'
+                ];
+
+                return $response;
+            }
+            // if($debtData === null){
+   $indebtData = [
+                'indebtItemId' => $this->request->getVar('indebtItemId'),
+                'indebtOwner' =>  $userId,
+                'quantityDebted' => $this->request->getVar('quantityDebted'),
+                'atPrice' =>    $this->request->getVar('atPrice'),
+                'initialDeposit' => $this->request->getVar('initialDeposit'),
+                'totalAmount' => $this->request->getVar('totalAmount'),
+                'endDate' => $this->request->getVar('endDate'),
+                'custId' => $this->request->getVar('custId'),
+                'SR_ID' =>  $dbReceipt
+            ];
+            // }
+            // else{
+            //     $indebtData = $debtData;
+            // }
+
+            $saveIndebtData = $this->indebtModel->save($indebtData);
+            if ($saveIndebtData) {
+                //update item Quantity in the inventory table
+                $item = $this->inventoryModel->find($this->request->getVar('indebtItemId'));
+                $itemQty = $item['itemQuantity'] -  $this->request->getVar('quantityDebted');
+                $this->inventoryModel->set('itemQuantity', $itemQty);
+                $this->inventoryModel->where('itemId', $this->request->getVar('indebtItemId'));
+                $this->inventoryModel->update();
+                $response = [
+                    'status' => true,
+                    'error' => 'null',
+                    'message' => 'Your item(s) have been added to your debts. To setup your alerts and client SMS notifications, please visit the Alerts and Notification panel...!'
+                ];
+                $this->recordStat($this->request->getVar('indebtItemId'), 'addDebt', NULL);
+                return $this->respond($response);
+            } else {
+                $response = [
+                    'status' => false,
+                    'error' => 'debtNotAdded',
+                    'message' => 'Fail! We could not process your debt order now. Check all entries and try again!'
+                ];
+                return $this->respond($response);
+            }
         }
-
-
     }
 
     // Handle debt payments
 
-    public function payDebt(){
+    public function payDebt()
+    {
         $userId = auth()->id();
-        $debtId = $this->request->getVar('debtId');
+        $debtId = $this->request->getVar('transactionId');
         $newPay = $this->request->getVar('amountPaid');
-$data = [
-    'debtId' => $this->request->getVar('debtId'),
-    'indebtOwner' => $userId,
-   'amountPaid' => $this->request->getVar('amountPaid'),
-];
+        $data = [
+            'debtId' => $this->request->getVar('transactionId'),
+            'indebtOwner' => $userId,
+            'amountPaid' => $this->request->getVar('amountPaid'),
+        ];
 
-$debt = ($this->indebtModel->find($debtId));
-$oldPay = $debt['initialDeposit'];
-$totalPay = $debt['totalAmount'];
-$saleItemId =  $debt['indebtItemId'];
-$saleQty = $debt['quantityDebted'];
-$custName = $debt['custContact'];
-$custContact = $debt['totalAmount'];
-$updatedPay = $oldPay + $newPay;
+        $debt = $this->indebtModel->find($debtId);
+        $oldPay = $debt['initialDeposit'];
+        $totalPay = $debt['totalAmount'];
+        $saleItemId =  $debt['indebtItemId'];
+        $saleQty = $debt['quantityDebted'];
+        $custId = $debt['custId'];
+        $updatedPay = $oldPay + $newPay;
 
-$saleData = [
-'saleItemId' => $saleItemId,
-'saleOwner' =>  $userId,
-'salePrice' => $totalPay,
-'saleQuantity' => $saleQty,
-'custName' => $custName ,
-'custContacts' => $custContact
-];
+        $saleData = [
+            'saleItemId' => $saleItemId,
+            'saleOwner' =>  $userId,
+            'salePrice' => $totalPay,
+            'saleQuantity' => $saleQty,
+            'custId' => $custId,
+        ];
 
-if($updatedPay <= $totalPay){
-    $this->indebtModel->Set('initialDeposit', $updatedPay);
-    $this->indebtModel->where('indebtId',  $debtId);
-    $paymentUpdate = $this->indebtModel->update();
-    if($paymentUpdate){
-        $paid = $this->debtTrackModel->save($data);
-     
-    if($paid){
-        //Save the debt as a sale if the payment is fullfilled
-        $ispaid = false;
-        if($totalPay == $updatedPay){
-        $saveSaleData = $this->salesModel->save($saleData);
-        $ispaid = true;
-        if($saveSaleData){
-        $this->recordStat(NULL, 'saleStock', 1);
+        if ($updatedPay <= $totalPay) {
+            $this->indebtModel->Set('initialDeposit', $updatedPay);
+            $this->indebtModel->where('indebtId',  $debtId);
+            $paymentUpdate = $this->indebtModel->update();
+            if ($paymentUpdate) {
+                $paid = $this->debtTrackModel->save($data);
+
+                if ($paid) {
+                    //Save the debt as a sale if the payment is fullfilled
+                    $ispaid = false;
+                    if ($totalPay == $updatedPay) {
+                        $saveSaleData = $this->salesModel->save($saleData);
+                        $ispaid = true;
+                        if ($saveSaleData) {
+                            $this->recordStat(NULL, 'saleStock', 1);
+                        }
+                    }
+                    $response = [
+                        'status' => true,
+                        'error' => 'null',
+                        'message' => 'Payment fullfilled...',
+                        'isPaidFully' => $ispaid
+                    ];
+                    return $this->respond($response);
+                } else {
+                    $response = [
+                        'status' => false,
+                        'error' => 'PaymentFailed',
+                        'message' => 'Fail! We could not process your payment order now. try again...!'
+                    ];
+                    return $this->respond($response);
+                }
+            } else {
+                $response = [
+                    'status' => false,
+                    'error' => 'OverPayment',
+                    'message' => 'Aready Paid or cash paid exceeds the amount to be paid!'
+                ];
+                return $this->respond($response);
+            }
         }
-        }
-        $response = [
-            'status' => true,
-            'error' => 'null',
-            'message' => 'Payment fullfilled...',
-            'isPaidFully' => $ispaid
-        ];
-        return $this->respond($response);
-        exit();
-    }else{
-        $response = [
-            'status' => false,
-            'error' => 'PaymentFailed',
-            'message' => 'Fail! We could not process your payment order now. try again...!'
-        ];
-        return $this->respond($response);
-        exit();
-    }
-    }else{
-        $response = [
-            'status' => false,
-            'error' => 'OverPayment',
-            'message' => 'Aready Paid or cash paid exceeds the amount to be paid!'
-        ];
-        return $this->respond($response);
-        exit();
-    }
-    
-}
-
     }
 
     /**
@@ -651,7 +765,7 @@ if($updatedPay <= $totalPay){
         //delete stock item
         $data = $this->inventoryModel->find($id);
 
-        if($data){
+        if ($data) {
             $del_stock_item = $this->inventoryModel->delete($id);
 
             $historyData = [
@@ -660,7 +774,7 @@ if($updatedPay <= $totalPay){
                 'historyDetails' => ''
             ];
 
-            if($del_stock_item){
+            if ($del_stock_item) {
                 // $saveHistoryData = $this->historyModel->save($historyData);
 
                 // if(!$saveHistoryData){
@@ -674,58 +788,66 @@ if($updatedPay <= $totalPay){
                 // }
                 // in case upload & it's history were recorded ok 
                 // else{
-                     $response = [
-                        'status' => true,
-                        'error' => null,
-                        // 'Messages' => 'Action history has been recorded successfully.'
-                        'Messages' => 'Your Item has been deleted successfully!.'
-                    ];
-                    return $this->respond($response);
-                    exit();
+
+                $payload = [
+                'saleId' => $id,
+                'message' => 'Item deleted' 
+            ];
+
+            // Trigger the event via Pusher
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'item-deleted', $payload);
+                
+                $response = [
+                    'status' => true,
+                    'error' => null,
+                    // 'Messages' => 'Action history has been recorded successfully.'
+                    'Messages' => 'Your Item has been deleted successfully!.'
+                ];
+                return $this->respond($response);
                 // }    
-            }
-            else{
+            } else {
                 $response = [
                     'status' => false,
                     'error' => 'deleteFail',
                     'message' => 'Item selected could not be deleted, try again in 10 minutes'
                 ];
                 return $this->respond($response);
-                exit();
             }
         }
         // in case there is no matching item
-        else{
+        else {
             return $this->nostockdata();
         }
     }
 
-     /**
+    /**
      * Add the designated resource object as a stat to the model
      *
      * @return mixed
      */
 
-    private function recordStat($item_id = NULL, $action = NULL, $limit= NULL){
+    private function recordStat($item_id = NULL, $action = NULL, $limit = NULL)
+    {
         $userId = auth()->id();
         $itemStockWorth = 0;
         $itemQty = 0;
         $statId = null;
-        if($item_id === NULL && ($action === 'update' || $action === 'createStock')){
-            if($item_id === Null){
+        if ($item_id === NULL && ($action === 'update' || $action === 'createStock')) {
+            if ($item_id === Null) {
                 $this->inventoryModel->orderBy('itemId', 'DESC');
                 $fetchedData = $this->inventoryModel->findAll(1);
                 $item_id = $fetchedData[0]['itemId'];
-                $itemStockWorth = $fetchedData[0]['itemQuantity']*$fetchedData[0]['itemStockPrice'];
+                $itemStockWorth = $fetchedData[0]['itemQuantity'] * $fetchedData[0]['itemStockPrice'];
                 $itemQty = $fetchedData[0]['itemQuantity'];
-            }else{
+            } else {
                 $fetchedData = $this->inventoryModel->find($item_id);
-                $itemStockWorth = $fetchedData['itemQuantity']*$fetchedData['itemStockPrice'];
+                $itemStockWorth = $fetchedData['itemQuantity'] * $fetchedData['itemStockPrice'];
                 $itemQty = $fetchedData['itemQuantity'];
                 $stat = $this->statisticsModel->where('statItemId', $item_id)->findAll();
                 $statId =  $stat[0]['statId'];
             }
-            
+
             $statData = [
                 'statItemId' => $item_id,
                 'busId' => $userId,
@@ -739,7 +861,7 @@ if($updatedPay <= $totalPay){
 
             $recordStatData = $this->statisticsModel->save($statData);
 
-            if(!$recordStatData){
+            if (!$recordStatData) {
                 $response = [
                     'status' => false,
                     'error' => 'recordFail',
@@ -747,10 +869,9 @@ if($updatedPay <= $totalPay){
                 ];
 
                 return $this->respond($response);
-                exit();
             }
             // in case stat data was recorded successfully
-            else{
+            else {
                 $response = [
                     'status' => true,
                     'error' => null,
@@ -758,18 +879,18 @@ if($updatedPay <= $totalPay){
                 ];
 
                 return $this->respond($response);
-                exit();
             }
         }
-//update stock stats 
-        if($action === 'addStock'){
+        //update stock stats 
+        if ($action === 'addStock') {
             $this->stockModel->orderBy('stockId', 'DESC');
             $fetchedStock = $this->stockModel->findAll(1);
             $stat = $this->statisticsModel->where('statItemId', $item_id)->findAll(1);
-            $itemStockWorth = $stat[0]['statItemStockWorth'] + ( $fetchedStock[0]['stockItemQuantity']*$fetchedStock[0]['stockItemPrice']);
+            // $itemStockWorth = $stat[0]['statItemStockWorth'] + ($fetchedStock[0]['stockItemQuantity'] * $fetchedStock[0]['stockItemPrice']);
+            $itemStockWorth = 0;
             $itemQty =  $stat[0]['statItemStock'] + $fetchedStock[0]['stockItemQuantity'];
             $statId =  $stat[0]['statId'];
-            
+
             $statData = [
                 'statItemStock' => $itemQty,
                 'statItemStockWorth' => $itemStockWorth,
@@ -782,7 +903,7 @@ if($updatedPay <= $totalPay){
             $this->statisticsModel->where('statId', $statId);
             $recordStatData = $this->statisticsModel->update();
 
-            if(!$recordStatData){
+            if (!$recordStatData) {
                 $response = [
                     'status' => false,
                     'error' => 'recordFail',
@@ -790,10 +911,9 @@ if($updatedPay <= $totalPay){
                 ];
 
                 return $this->respond($response);
-                exit();
             }
             // in case stat data was recorded successfully
-            else{
+            else {
                 $response = [
                     'status' => true,
                     'error' => null,
@@ -801,127 +921,122 @@ if($updatedPay <= $totalPay){
                 ];
 
                 return $this->respond($response);
-                exit();
             }
         }
 
-//update debt stats 
-if($action === 'addDebt'){
-    $this->indebtModel->orderBy('indebtId', 'DESC');
-    $fetchedDebt = $this->indebtModel->findAll(1);
-    $stat = $this->statisticsModel->where('statItemId', $item_id)->findAll(1);
-    $itemStockWorth = $stat[0]['statItemIndebtWorth'] + ( $fetchedDebt[0]['quantityDebted']*$fetchedDebt[0]['atPrice']);
-    $statItemIndebt =  $stat[0]['statItemIndebt'] + $fetchedDebt[0]['quantityDebted'];
-    $statId =  $stat[0]['statId'];
-    
-    $statData = [
-        // 'statItemSales' => 0,
-        // 'statItemSalesWorth' => 0,
-        'statItemIndebt' => $statItemIndebt,
-        'statItemIndebtWorth' => $itemStockWorth
-    ];
-    $this->statisticsModel->set($statData);
-    $this->statisticsModel->where('statId', $statId);
-    $recordStatData = $this->statisticsModel->update();
+        //update debt stats 
+        if ($action === 'addDebt') {
+            $this->indebtModel->orderBy('indebtId', 'DESC');
+            $fetchedDebt = $this->indebtModel->findAll(1);
+            $stat = $this->statisticsModel->where('statItemId', $item_id)->findAll(1);
+            $itemStockWorth = $stat[0]['statItemIndebtWorth'] + ($fetchedDebt[0]['quantityDebted'] * $fetchedDebt[0]['atPrice']);
+            $statItemIndebt =  $stat[0]['statItemIndebt'] + $fetchedDebt[0]['quantityDebted'];
+            $statId =  $stat[0]['statId'];
 
-    if(!$recordStatData){
-        $response = [
-            'status' => false,
-            'error' => 'recordFail',
-            'message' => 'Your records have not been fully kept.'
-        ];
+            $statData = [
+                // 'statItemSales' => 0,
+                // 'statItemSalesWorth' => 0,
+                'statItemIndebt' => $statItemIndebt,
+                'statItemIndebtWorth' => $itemStockWorth
+            ];
+            $this->statisticsModel->set($statData);
+            $this->statisticsModel->where('statId', $statId);
+            $recordStatData = $this->statisticsModel->update();
 
-        return $this->respond($response);
-        exit();
-    }
-    // in case stat data was recorded successfully
-    else{
-        $response = [
-            'status' => true,
-            'error' => null,
-            'message' => 'Your statistics records have successfully been kept.'
-        ];
+            if (!$recordStatData) {
+                $response = [
+                    'status' => false,
+                    'error' => 'recordFail',
+                    'message' => 'Your records have not been fully kept.'
+                ];
 
-        return $this->respond($response);
-        exit();
-    }
-}
+                return $this->respond($response);
+            }
+            // in case stat data was recorded successfully
+            else {
+                $response = [
+                    'status' => true,
+                    'error' => null,
+                    'message' => 'Your statistics records have successfully been kept.'
+                ];
 
-//update item sales stats 
-if($action === 'saleStock'){
-    $userId = auth()->id();
-    $this->salesModel->orderBy('saleId', 'DESC');
-    $this->salesModel->where('saleOwner',$userId);
-    $fetchedSales = $this->salesModel->findAll($limit);
-    foreach($fetchedSales as $sale=> $item){
-        $stat = $this->statisticsModel->where('statItemId',  $item['saleItemId'])->findAll(1);
-        $itemSaleWorth = $stat[0]['statItemSalesWorth'] + ($item['saleQuantity'] * $item['salePrice']);
-        $statItemSale =  $stat[0]['statItemSales'] + $item['saleQuantity'];
-        $statId =  $stat[0]['statId'];
-    
-    $statData = [
-        'statItemSales' =>  $statItemSale,
-        'statItemSalesWorth' => $itemSaleWorth,
-    ];
-    $this->statisticsModel->set($statData);
-    $this->statisticsModel->where('statId', $statId);
-    $recordStatData = $this->statisticsModel->update();
+                return $this->respond($response);
+            }
+        }
 
-    if(!$recordStatData){
-        $response = [
-            'status' => false,
-            'error' => 'recordFail',
-            'message' => 'Your records have not been fully kept.'
-        ];
+        //update item sales stats 
+        if ($action === 'saleStock') {
+            $userId = auth()->id();
+            $this->salesModel->orderBy('saleId', 'DESC');
+            $this->salesModel->where('saleOwner', $userId);
+            $fetchedSales = $this->salesModel->findAll($limit);
+            foreach ($fetchedSales as $sale => $item) {
+                $stat = $this->statisticsModel->where('statItemId',  $item['saleItemId'])->findAll(1);
+                $itemSaleWorth = $stat[0]['statItemSalesWorth'] + ($item['saleQuantity'] * $item['salePrice']);
+                $statItemSale =  $stat[0]['statItemSales'] + $item['saleQuantity'];
+                $statId =  $stat[0]['statId'];
 
-        return $this->respond($response);
-        exit();
-    }
-    // in case stat data was recorded successfully
-    else{
-        $response = [
-            'status' => true,
-            'error' => null,
-            'message' => 'Your statistics records have successfully been kept.'
-        ];
+                $statData = [
+                    'statItemSales' =>  $statItemSale,
+                    'statItemSalesWorth' => $itemSaleWorth,
+                ];
+                $this->statisticsModel->set($statData);
+                $this->statisticsModel->where('statId', $statId);
+                $recordStatData = $this->statisticsModel->update();
 
-        return $this->respond($response);
-        exit();
-    }
-}
-}
+                if (!$recordStatData) {
+                    $response = [
+                        'status' => false,
+                        'error' => 'recordFail',
+                        'message' => 'Your records have not been fully kept.'
+                    ];
 
-    }
+                    return $this->respond($response);
+                }
+                // in case stat data was recorded successfully
+                else {
+                    $response = [
+                        'status' => true,
+                        'error' => null,
+                        'message' => 'Your statistics records have successfully been kept.'
+                    ];
 
-    // Example controller method for image upload
-public function uploadProfileImage()
-{
-    if ($this->request->getMethod() === 'post') {
-        $file = $this->request->getFile('file'); // Get the uploaded file
-
-        if ($file->isValid() && $file->getClientMimeType() === 'image/jpeg') {
-            // Save the file to a designated folder (e.g., 'uploads')
-            $newName = $file->getRandomName();
-            $file->move(ROOTPATH . 'public/uploads', $newName);
-
-            // Update the user's profile image path in the database
-            // (You'll need to implement this part based on your database schema)
-            // Example: $this->profile_model->updateProfileImage($user_id, $newName);
-
-            return redirect()->to('/profile')->with('success', 'Profile image uploaded successfully.');
-        } else {
-            return redirect()->back()->with('error', 'Invalid file format. Please upload a JPEG image.');
+                    return $this->respond($response);
+                }
+            }
         }
     }
 
-    // Load your view here
-    // Example: return view('profile/upload_form');
-}
+    // Example controller method for image upload
+    public function uploadProfileImage()
+    {
+        if ($this->request->getMethod() === 'post') {
+            $file = $this->request->getFile('file'); // Get the uploaded file
+
+            if ($file->isValid() && $file->getClientMimeType() === 'image/jpeg') {
+                // Save the file to a designated folder (e.g., 'uploads')
+                $newName = $file->getRandomName();
+                $file->move(ROOTPATH . 'public/uploads', $newName);
+
+                // Update the user's profile image path in the database
+                // (You'll need to implement this part based on your database schema)
+                // Example: $this->profile_model->updateProfileImage($user_id, $newName);
+
+                return redirect()->to('/profile')->with('success', 'Profile image uploaded successfully.');
+            } else {
+                return redirect()->back()->with('error', 'Invalid file format. Please upload a JPEG image.');
+            }
+        }
+
+        // Load your view here
+        // Example: return view('profile/upload_form');
+    }
 
 
-    private function validateStockEntries($page){
+    private function validateStockEntries($page)
+    {
         $lowercase = strtolower($page);
-        if($lowercase == 'entry'){
+        if ($lowercase == 'entry') {
             return $this->validate([
                 'item_name' => [
                     'rules' => 'required|max_length[255]|trim|min_length[3]|is_unique[stock.itemName]',
@@ -968,9 +1083,8 @@ public function uploadProfileImage()
                     'label' => 'Item Owner'
                 ]
 
-                ]);
-        }
-        elseif($lowercase === 'updateitem'){
+            ]);
+        } elseif ($lowercase === 'updateitem') {
             return $this->validate([
                 'item_name' => [
                     'rules' => 'required|max_length[255]|trim|min_length[3]',
@@ -989,15 +1103,15 @@ public function uploadProfileImage()
                     'label' => 'Item Model'
                 ],
                 'item_quality' => [
-                    'rules' => 'required|max_length[50]|trim',
+                    'rules' => 'max_length[50]|trim',
                     'label' => 'Item Quality'
                 ],
                 'item_quantity' => [
-                    'rules' => 'required|numeric|max_length[11]|trim|min_length[1]|greater_than[0]',
+                    'rules' => 'numeric|max_length[11]|trim|min_length[1]',
                     'label' => 'Item Quantity'
                 ],
                 'item_condition' => [
-                    'rules' => 'required|max_length[50]|min_length[3]|trim|alpha_space',
+                    'rules' => 'max_length[50]|trim|alpha_space',
                     'label' => 'Item Condition'
                 ],
                 'item_size' => [
@@ -1013,18 +1127,16 @@ public function uploadProfileImage()
                     'label' => 'Item Notes'
                 ]
             ]);
-        }
-        elseif($lowercase === 'sellitem'){
+        } elseif ($lowercase === 'sellitem') {
             return $this->validate([
                 'sale_items' => [
                     'rules' => 'required|max_length[1]|max_length[11]|greater_than[0]|trim',
                     'label' => 'Item being sold'
                 ],
             ]);
-        }
-        elseif($lowercase === 'debtitem'){
+        } elseif ($lowercase === 'debtitem') {
             return $this->validate([
-                 'debt_item' => [
+                'debt_item' => [
                     'rules' => 'required|numeric|max_length[1]|max_length[11]|greater_than[0]|trim',
                     'label' => 'Item being sold'
                 ],
@@ -1041,8 +1153,7 @@ public function uploadProfileImage()
                     'label' => 'Item Price'
                 ]
             ]);
-        }
-        else{
+        } else {
             echo "Nothing";
         }
     }

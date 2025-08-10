@@ -13,7 +13,7 @@ class Receipt extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['timeStamp'];
+    protected $allowedFields    = ['timeStamp', 'dicount', 'dueAmount', 'moreInfo', 'paymentMethod', 'amountPaid'];
 
     // Dates
     protected $useTimestamps = false;

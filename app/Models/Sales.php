@@ -13,7 +13,7 @@ class Sales extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['saleItemId', 'saleOwner','SR_ID', 'salePrice', 'saleQuantity', 'custName', 'custContacts'];
+    protected $allowedFields    = ['saleItemId', 'saleOwner','SR_ID', 'salePrice', 'saleQuantity', 'custId'];
 
     // Dates
     protected $useTimestamps = false;

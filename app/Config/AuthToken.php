@@ -44,7 +44,7 @@ class AuthToken extends ShieldAuthToken
      * Determines the amount of time, in seconds, that an unused token can
      * be used.
      */
-    public int $unusedTokenLifetime = DAY;
+    public int $unusedTokenLifetime = 60;
 
     /**
      * --------------------------------------------------------------------

@@ -71,7 +71,8 @@ class Retrievals extends ResourceController
     {
         $userId = auth()->id();
         // home page => fetch stock item details
-        $data = $this->inventoryModel->where('itemOwner', $userId)->findAll();
+        // $data = $this->inventoryModel->where('itemOwner', $userId)->findAll();
+        $data = $this->inventoryModel->findAll();
 
         if(empty($data)){
             $data = [];
@@ -108,7 +109,8 @@ class Retrievals extends ResourceController
     {
         $userId = auth()->id();
         //fetch stock
-        $stockData =  $this->stockModel->where('stockOwner',$userId)->findAll();
+        // $stockData =  $this->stockModel->where('stockOwner',$userId)->findAll();
+        $stockData =  $this->stockModel->findAll();
         if(empty($stockData)){
             return $this->respond([]);
         }
@@ -132,7 +134,8 @@ class Retrievals extends ResourceController
     {
         $userId = auth()->id();
         // get stats
-        $data = $this->statisticsModel->where('busId', $userId)->findAll();
+        // $data = $this->statisticsModel->where('busId', $userId)->findAll();
+        $data = $this->statisticsModel->findAll();
 
         if(empty($data)){
             return $this->nostockdata();
@@ -153,7 +156,8 @@ class Retrievals extends ResourceController
     {
         $userId = auth()->id();
         //stock history
-        $data = $this->historyModel->where('busId', $userId)->orderBy('historyDateCreated', 'desc')->findAll();
+        // $data = $this->historyModel->where('busId', $userId)->orderBy('historyDateCreated', 'desc')->findAll();
+        $data = $this->historyModel->orderBy('historyDateCreated', 'desc')->findAll();
 
         if(empty($data)){
             return $this->nostockdata();
@@ -202,7 +206,8 @@ class Retrievals extends ResourceController
 
 public function getDebts(){
     $userId = auth()->id();
-    $debts = $this->indebtModel->where('indebtOwner', $userId)->findAll();
+    // $debts = $this->indebtModel->where('indebtOwner', $userId)->findAll();
+    $debts = $this->indebtModel->findAll();
     if($debts){
         return $this->respond($debts);
         exit();
@@ -220,7 +225,8 @@ public function getDebts(){
 
 public function getSales(){
     $userId = auth()->id();
-    $sales = $this->salesModel->where('saleOwner', $userId)->findAll();
+    // $sales = $this->salesModel->where('saleOwner', $userId)->findAll();
+    $sales = $this->salesModel->findAll();
     if($sales){
         return $this->respond($sales);
         exit();

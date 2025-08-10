@@ -21,8 +21,9 @@ class Encryption extends BaseConfig
      * You need to ensure it is long enough for the cipher and mode you plan to use.
      * See the user guide for more info.
      */
-    public string $key = '';
-
+    public string $key = '38af4d1dc2cc7c24904151f4297525028eac3afe6beef88b1053a5d10e487d9f';
+    // command to generate the above key
+   // php -r 'echo bin2hex(random_bytes(32));'
     /**
      * --------------------------------------------------------------------------
      * Encryption Driver to Use
