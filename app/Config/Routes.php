@@ -20,6 +20,15 @@ $routes->post('forgot-password', 'PasswordResetController::sendResetLink');
 $routes->get('reset-password', 'PasswordResetController::resetPasswordForm');
 $routes->post('reset-password', 'PasswordResetController::handleReset');
 
+/**
+ * --------------------------------------------------------------------
+ * Initial Setup Route
+ * --------------------------------------------------------------------
+ * IMPORTANT: This route is for one-time setup only.
+ * You MUST remove or comment it out after setup for security.
+ */
+// $routes->get('setup/create-admin', 'SetupController::createAdmin');
+
 
 $routes->get('/', 'Home::index');
 $routes->get('sendmail', 'EmailController::sendmail');
@@ -43,6 +52,7 @@ $routes->get("invalid-access", "AuthController::accessDenied");
 $routes->get("getUsers", "AuthController::getUsers", ['filter' => 'jwt']);
 $routes->post("deleteUser", "AuthController::deleteUser", ['filter' => 'jwt']);
 $routes->post("register", "AuthController::register", ['filter' => 'jwt']);
+$routes->post("updateUserRoles", "AuthController::updateUserRolesAndPermissions", ['filter' => 'jwt']);
 $routes->post("changePassword", "AuthController::changeUserPassword", ['filter' => 'jwt']);
 
 //RawMaterials

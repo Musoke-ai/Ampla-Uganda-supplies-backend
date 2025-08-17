@@ -50,7 +50,9 @@ class AuthController extends ResourceController {
                 $payload[] = array_merge(
                     $user->toArray(),     // the original user fields
                     ['roles' => $roles,
-                    'permissions' => $permissions
+                    'permissions' => $permissions,
+                    'email' => $user->email,
+                    
                     ]   // new roles and permissions fields
                   
                 );
@@ -122,6 +124,70 @@ public function deleteUser()
         return $this->failServerError('Failed to delete user. Please try again.');
     }
 }
+
+    public function updateUserRolesAndPermissions()
+    {
+        // 1. Validation
+        $rules = [
+            'id'   => 'required|is_not_unique[users.id]',
+            'roles'     => 'permit_empty|is_array',
+            'permissions' => 'permit_empty|is_array',
+        ];
+
+        if (!$this->validate($rules)) {
+            return $this->fail($this->validator->getErrors());
+        }
+
+        // 2. Get and sanitize data from the request
+        $userId = $this->request->getVar('id');
+        $roles = array_map(fn($r) => strtolower(str_replace(' ', '', trim($r))), $this->request->getVar('roles') ?? []);
+        $permissions = array_map(fn($p) => strtolower(str_replace(' ', '', trim($p))), $this->request->getVar('permissions') ?? []);
+
+        // 3. Start a database transaction to ensure atomicity
+        $db = \Config\Database::connect();
+        $db->transStart();
+
+        // 4. Delete old roles and permissions for the user
+        $this->group->where('user_id', $userId)->delete();
+        $this->permission->where('user_id', $userId)->delete();
+
+        // 5. Add new roles if any are provided
+        if (!empty($roles)) {
+            $batchRoles = [];
+            foreach ($roles as $role) {
+                $batchRoles[] = [
+                    'user_id' => $userId,
+                    'group'   => $role,
+                ];
+            }
+            $this->group->insertBatch($batchRoles);
+        }
+
+        // 6. Add new permissions if any are provided
+        if (!empty($permissions)) {
+            $batchPermissions = [];
+            foreach ($permissions as $permission) {
+                $batchPermissions[] = [
+                    'user_id'    => $userId,
+                    'permission' => $permission,
+                ];
+            }
+            $this->permission->insertBatch($batchPermissions);
+        }
+
+        // 7. Complete the transaction
+        $db->transComplete();
+
+        if ($db->transStatus() === false) {
+            return $this->failServerError('Could not update user roles and permissions.');
+        }
+
+        // 8. Return success response
+        return $this->respond([
+            'status'  => true,
+            'message' => 'User roles and permissions updated successfully.',
+        ]);
+    }
 
     public function register() {
         // Defined validation rules for the required fields
