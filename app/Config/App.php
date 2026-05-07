@@ -17,7 +17,7 @@ class App extends BaseConfig
      *    http://example.com/
      */
     public string $baseURL = 'http://localhost/AmplaBackUp/amplaerp/';
-    // public string $baseURL = 'https://www.poweredstock.com/api/';
+    // public string $baseURL = 'https://your-ampla-uganda-domain.example/api/';
 
     /**
      * Allowed Hostnames in the Site URL other than the hostname in the baseURL.

@@ -8,12 +8,12 @@ class CustomerModel extends Model
 {
     protected $DBGroup          = 'default';
     protected $table            = 'customers';
-    protected $primaryKey       = 'custID';
+    protected $primaryKey       = 'custId';
     protected $useAutoIncrement = true;
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['custID','custOwner','custName', 'custContact','custEmail','custLocation'];
+    protected $allowedFields    = ['custId','custOwner','branchId','custName', 'custContact','custEmail','custLocation'];
 
     // Dates
     protected $useTimestamps = false;

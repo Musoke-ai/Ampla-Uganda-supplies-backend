@@ -17,7 +17,7 @@ class EmailController extends ResourceController
         // initialising the email library
         $email = \Config\Services::email();
 
-        $email->setFrom('support@poweredStock.com', 'HamTech Audios');
+        $email->setFrom(env('MAIL_FROM_ADDRESS', 'support@amplauganda.local'), env('MAIL_FROM_NAME', 'Ampla Uganda'));
         $email->setTo('hmusoke9@gmail.com');
 
         //these two are optional and can be removed

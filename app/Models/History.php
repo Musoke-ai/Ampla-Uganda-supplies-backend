@@ -13,7 +13,7 @@ class History extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['historyItemId', 'busId', 'historyAction', 'historyDetails'];
+    protected $allowedFields    = ['branchId', 'historyItemId', 'busId', 'historyAction', 'historyDetails'];
 
     // Dates
     protected $useTimestamps = false;

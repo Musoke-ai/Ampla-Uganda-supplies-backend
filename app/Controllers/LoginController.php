@@ -9,6 +9,7 @@ use CodeIgniter\Shield\Authentication\Authenticators\Session;
 use CodeIgniter\Shield\Authentication\JWTManager;
 use CodeIgniter\Shield\Models\UserModel;
 use CodeIgniter\Shield\Models\PermissionModel;
+use App\Services\BranchContextService;
 
 class LoginController extends ResourceController
 {
@@ -20,11 +21,13 @@ class LoginController extends ResourceController
 
     private $userModel;
     private $permissionModel;
+    private BranchContextService $branchContext;
 
     public function __construct()
     {
         $this->userModel = new UserModel();
         $this->permissionModel = new PermissionModel();
+        $this->branchContext = service('branchContext');
     }
 
     public function jwtLogin()
@@ -94,7 +97,7 @@ class LoginController extends ResourceController
                     'expires' => time() + 43200, // 12 hours expiry time
                     // 'expires' => time() + (86400 * 30), // 30 days expiry time
                     'path' => '/', // Available in the entire domain
-                    // 'domain' => 'http://localhost/mystock', // Your domain
+                    // 'domain' => env('COOKIE_DOMAIN'), // Your domain
                     'secure' => true, // Only send over HTTPS
                     'httponly' => true, // Accessible only via HTTP protocol
                     'samesite' => 'Lax' // Helps mitigate CSRF attacks
@@ -109,6 +112,7 @@ class LoginController extends ResourceController
                     'roles' => $roles,
                     'permissions' => $permissions,
                     'user_id' => $user->id,
+                    'branchScope' => $this->branchContext->getUserScope((int) $user->id),
                 ];
 
                 $response = [
@@ -152,7 +156,8 @@ class LoginController extends ResourceController
                     'accessToken' =>  $accesToken,
                     'permissions' =>  $permissions,
                     'roles' => $roles,
-                    'user_id' => $user->id
+                    'user_id' => $user->id,
+                    'branchScope' => $this->branchContext->getUserScope((int) $user->id),
                 ];
 
                 $response = [
@@ -182,7 +187,7 @@ class LoginController extends ResourceController
             'expires' => time() - 43200, // 1 day expiry time
             // 'expires' => time() + (86400 * 30), // 30 days expiry time
             'path' => '/', // Available in the entire domain
-            // 'domain' => 'http://localhost/mystock', // Your domain
+            // 'domain' => env('COOKIE_DOMAIN'), // Your domain
             'secure' => true, // Only send over HTTPS
             'httponly' => true, // Accessible only via HTTP protocol
             'samesite' => 'Lax' // Helps mitigate CSRF attacks

@@ -12,8 +12,16 @@ use App\Models\Indebt;
 use App\Models\DebtTrack;
 use App\Models\Stock;
 use App\Models\Receipt;
+use App\Models\CustomerModel;
+use App\Services\BranchContextService;
+use App\Services\StockLedgerService;
+use App\Services\AuditLogService;
+use App\Services\SaleCalculationService;
 use CodeIgniter\Shield\Models\UserModel;
 use CodeIgniter\Shield\Entities\User;
+use InvalidArgumentException;
+use RuntimeException;
+use Throwable;
 
 class Entries extends ResourceController
 {
@@ -36,6 +44,11 @@ class Entries extends ResourceController
     private $debtTrackModel;
     private $stockModel;
     private $receiptModel;
+    private CustomerModel $customerModel;
+    private BranchContextService $branchContext;
+    private StockLedgerService $stockLedger;
+    private AuditLogService $auditLog;
+    private SaleCalculationService $saleCalculator;
 
 
     public function __construct()
@@ -49,6 +62,11 @@ class Entries extends ResourceController
         $this->debtTrackModel = new DebtTrack();
         $this->stockModel = new Stock();
         $this->receiptModel = new Receipt();
+        $this->customerModel = new CustomerModel();
+        $this->branchContext = service('branchContext');
+        $this->stockLedger = new StockLedgerService();
+        $this->auditLog = new AuditLogService();
+        $this->saleCalculator = new SaleCalculationService();
     }
 
     private function nostockdata()
@@ -97,98 +115,137 @@ class Entries extends ResourceController
     //Enter new stock quantites
     public function addStock()
     {
-        $userId = auth()->id();
-        // $data = [];
-        if ($this->request->getMethod() === 'post') {
-            // $stockItems = $this->request->getVar('stockItems');
-            $stockItems = $this->request->getVar('stockItems');
-               if (empty($stockItems)) {
-                $response = [
-                    'status' => false,
-                    'error' => 'Stock Items List Empty',
-                    'message' => 'Stock Items list is empty add an item or items and try again!'
-                ];
-                return $this->respond($response);
-            }else{
+        $userId = (int) auth()->id();
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
+        }
 
-                $batchData = [];
-                $batchUpdateData = [];
-
-               foreach ($stockItems as $item) {
-                
-      $batchData[] = [
-        'stockOwner'        => $userId,
-        'stockItem'         => $item->stockItem,
-        'oldStock'          => $item->oldStock,
-        'stockItemQuantity' => $item->stockItemQuantity,
-        'stockItemPrice'    => $item->itemStockPrice,
-        'itemSellingPrice'  => $item->itemLeastPrice,
-        'itemSupplier'      => 'none',
-    ];
-        $batchUpdateData[] = [
-        'itemId'         => $item->stockItem,
-        'itemQuantity' => (int)$item->stockItemQuantity + (int)$item->oldStock,
-    ];
-               }
-
-
-               // Insert all at once
-$insertBatchQuery = $this->stockModel->insertBatch($batchData);
- if (empty($insertBatchQuery)) {
-                $response = [
-                    'status' => false,
-                    'error' => 'StockItemFail',
-                    'message' => 'Item not added in the stock and error occured or check all fields and try again!'
-                ];
-                return $this->respond($response);
-            } else {
-                // $item = $this->inventoryModel->find($this->request->getVar('stockItem'));
-                // $newQuantity =  $item['itemQuantity'] + $this->request->getVar('stockItemQuantity');
-                // $this->inventoryModel->set('itemQuantity', $newQuantity);
-                // $this->inventoryModel->where('itemId', $this->request->getVar('stockItem'));
-                // Update all rows where `id` matches
-                $updateInventoryItems = $this->inventoryModel->updateBatch($batchUpdateData, 'itemId');
-                // $updateInventoryItem = $this->inventoryModel->update();
-                if ($updateInventoryItems) {
-                      $payload = [
-                'stockId' => null,
-                'message' => 'Stock added' 
-            ];
-
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('entries-channel', 'stock-added', $payload);
-                    $response = [
-                        'status' => true,
-                        'error' => 'null',
-                        'itemsUpdated' => $updateInventoryItems,
-                        'iems2' => $batchUpdateData,
-                        'items' => $batchData,
-                        'stock' => $stockItems,
-                        'message' => 'Item(s) successfully added in the stock.'
-                    ];
-                    // $this->recordStat($this->request->getVar('stockItem'), 'addStock', NULL);
-                    return $this->respond($response);
-                } else {
-                    $response = [
-                        'status' => false,
-                        'error' => 'null',
-                        'message' => 'Inventory not updated.'
-                    ];
-                    return $this->respond($response);
-                    // exit();
-                }
-            }
-
-               }
-            }
-        else {
-            $response = [
+        if ($this->request->getMethod() !== 'post') {
+            return $this->respond([
                 'status' => false,
                 'error' => 'RequestMethodError',
                 'message' => 'The request method is not post set it to post and try again.'
-            ];
-            return $this->respond($response);
+            ], 405);
+        }
+
+        $stockItems = $this->request->getVar('stockItems');
+        if (empty($stockItems) || !is_array($stockItems)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'StockItemsListEmpty',
+                'message' => 'Stock Items list is empty add an item or items and try again!'
+            ], 400);
+        }
+
+        $db = db_connect();
+        $createdStockIds = [];
+
+        try {
+            $db->transBegin();
+
+            foreach ($stockItems as $item) {
+                $itemData = is_array($item) ? $item : (array) $item;
+                $productId = (int) ($itemData['stockItem'] ?? 0);
+                $quantity = (float) ($itemData['stockItemQuantity'] ?? 0);
+                $stockPrice = isset($itemData['itemStockPrice']) && is_numeric($itemData['itemStockPrice'])
+                    ? (float) $itemData['itemStockPrice']
+                    : 0.0;
+                $sellingPrice = isset($itemData['itemLeastPrice']) && is_numeric($itemData['itemLeastPrice'])
+                    ? (float) $itemData['itemLeastPrice']
+                    : 0.0;
+
+                if ($productId <= 0 || $quantity <= 0 || $stockPrice < 0 || $sellingPrice < 0) {
+                    throw new InvalidArgumentException('Each stock item must have a valid product, positive quantity, and valid prices.');
+                }
+
+                $inventoryItem = $this->inventoryModel->find($productId);
+                if (!$inventoryItem || (int) ($inventoryItem['branchId'] ?? 0) !== $branchId) {
+                    throw new InvalidArgumentException('One or more selected products do not belong to the active branch.');
+                }
+
+                $oldStock = (float) ($inventoryItem['itemQuantity'] ?? 0);
+                $stockId = $this->stockModel->insert([
+                    'branchId' => $branchId,
+                    'stockOwner' => $userId,
+                    'stockItem' => $productId,
+                    'oldStock' => $oldStock,
+                    'stockItemQuantity' => $quantity,
+                    'stockItemPrice' => $stockPrice,
+                    'itemSellingPrice' => $sellingPrice,
+                    'itemSupplier' => $itemData['itemSupplier'] ?? 'none',
+                ], true);
+
+                if (!$stockId) {
+                    throw new RuntimeException('Stock intake record could not be created.');
+                }
+
+                $updated = $db->table('inventory')
+                    ->where('branchId', $branchId)
+                    ->where('itemId', $productId)
+                    ->set('itemQuantity', 'itemQuantity + ' . $quantity, false)
+                    ->update();
+
+                if (!$updated || $db->affectedRows() !== 1) {
+                    throw new RuntimeException('Inventory quantity could not be updated.');
+                }
+
+                $updatedItem = $this->inventoryModel->find($productId);
+                $this->stockLedger->recordProductMovement(
+                    $branchId,
+                    $productId,
+                    'purchase',
+                    $quantity,
+                    0,
+                    (float) $updatedItem['itemQuantity'],
+                    $stockPrice,
+                    'stock',
+                    $stockId,
+                    'STK-' . $stockId,
+                    $userId
+                );
+
+                $this->auditLog->record(
+                    'stock.intake_created',
+                    'stock',
+                    $stockId,
+                    $inventoryItem,
+                    $updatedItem,
+                    $userId,
+                    $branchId,
+                    ['quantity_in' => $quantity]
+                );
+
+                $createdStockIds[] = $stockId;
+            }
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Stock intake transaction failed.');
+            }
+
+            $db->transCommit();
+
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'stock-added', [
+                'stockId' => null,
+                'message' => 'Stock added'
+            ]);
+
+            return $this->respond([
+                'status' => true,
+                'error' => null,
+                'stockIds' => $createdStockIds,
+                'message' => 'Item(s) successfully added in the stock.'
+            ]);
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Stock intake failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'error' => 'StockIntakeFailed',
+                'message' => $e instanceof InvalidArgumentException ? $e->getMessage() : 'Stock intake could not be completed.'
+            ], $e instanceof InvalidArgumentException ? 400 : 500);
         }
     }
 
@@ -201,18 +258,31 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
     public function createStock()
     {
         $userId = auth()->id();
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
+        }
         //handle & submit stock form entries
         if ($this->request->getMethod() === 'post') {
             $stockData = [
+                'branchId' => $branchId,
                 'itemName' => $this->request->getVar('item_name'),
                 'itemCategoryId' => $this->request->getVar('item_category'),
                 'itemModel' => $this->request->getVar('item_model'),
+                'itemSku' => $this->nullableString($this->request->getVar('item_sku')),
+                'itemBarcode' => $this->nullableString($this->request->getVar('item_barcode')),
+                'itemBrand' => $this->nullableString($this->request->getVar('item_brand')),
+                'itemProductType' => $this->request->getVar('item_product_type') ?: 'purchased',
+                'itemUnit' => $this->request->getVar('item_unit') ?: 'pcs',
+                'itemSupplier' => $this->nullableString($this->request->getVar('item_supplier')),
+                'itemReorderLevel' => $this->optionalNumber($this->request->getVar('item_reorder_level'), 0),
                 'itemQuality' => $this->request->getVar('item_quality'),
                 'itemQuantity' => $this->request->getVar('item_quantity'),
                 'itemCondition' => $this->request->getVar('item_condition'),
                 'itemSize' => $this->request->getVar('item_size'),
-                'itemStockPrice' => $this->request->getVar('item_stock_price'),
+                'itemStockPrice' => $this->optionalNumber($this->request->getVar('item_stock_price'), 0),
                 'itemLeastPrice' => $this->request->getVar('item_min_price'),
+                'itemWholesalePrice' => $this->optionalNumber($this->request->getVar('item_wholesale_price'), null),
                 'itemNotes' => $this->request->getVar('item_notes'),
                 'itemOwner' =>  $userId
             ];
@@ -224,6 +294,7 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
                 $data = $this->inventoryModel->where('itemOwner', $userId)->orderBy('itemId', 'DESC')->find();
                 $item_id = $data[0]['itemId'];
                 $historyData = [
+                    'branchId' => $branchId,
                     'historyItemId' => $item_id,
                     'busId' => $userId,
                     'historyAction' => 'New item added',
@@ -289,7 +360,7 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
         //fetch item to edit
         $data = $this->inventoryModel->find($id);
 
-        if ($data) {
+        if ($data && $this->branchContext->recordMatchesCurrentBranch($data)) {
             return $this->respond($data);
         } else {
             return $this->nostockdata();
@@ -304,6 +375,7 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
     public function update($id = null)
     {
         $userId = auth()->id();
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
         //update selected item
         $id = $this->request->getVar('itemId');
         $data = $this->inventoryModel->find($id);
@@ -312,25 +384,38 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
             // return $this->nostockdata();
             return $this->respond($id);
         }
+        if (!$this->branchContext->recordMatchesCurrentBranch($data)) {
+            return $this->respond(['status' => false, 'message' => 'This product is outside your current branch scope.'], 403);
+        }
         // in case data to update is available //&& $this->validateStockEntries('updateitem')
         else {
             if ($this->request->getMethod() === 'post' && $this->validateStockEntries('updateitem')) {
                 $updateStock = [];
                 $stockDataUpdate = [
+                    'branchId' => $branchId ?? ($data['branchId'] ?? null),
                     'itemName' => $this->request->getVar('item_name'),
                     'itemCategoryId' => $this->request->getVar('item_category'),
                     'itemModel' => $this->request->getVar('item_model'),
+                    'itemSku' => $this->nullableString($this->request->getVar('item_sku')),
+                    'itemBarcode' => $this->nullableString($this->request->getVar('item_barcode')),
+                    'itemBrand' => $this->nullableString($this->request->getVar('item_brand')),
+                    'itemProductType' => $this->request->getVar('item_product_type') ?: 'purchased',
+                    'itemUnit' => $this->request->getVar('item_unit') ?: 'pcs',
+                    'itemSupplier' => $this->nullableString($this->request->getVar('item_supplier')),
+                    'itemReorderLevel' => $this->optionalNumber($this->request->getVar('item_reorder_level'), 0),
                     'itemQuality' => $this->request->getVar('item_quality'),
                     'itemQuantity' => $this->request->getVar('item_quantity'),
                     'itemCondition' => $this->request->getVar('item_condition'),
                     'itemSize' => $this->request->getVar('item_size'),
-                    'itemStockPrice' => $this->request->getVar('item_stock_price'),
+                    'itemStockPrice' => $this->optionalNumber($this->request->getVar('item_stock_price'), 0),
                     'itemLeastPrice' => $this->request->getVar('item_min_price'),
+                    'itemWholesalePrice' => $this->optionalNumber($this->request->getVar('item_wholesale_price'), null),
                     'itemNotes' => $this->request->getVar('item_notes'),
                     'itemOwner' => $userId,
                 ];
 
                 $historyData = [
+                    'branchId' => $stockDataUpdate['branchId'],
                     'historyItemId' => $id,
                     'historyAction' => 'Updated an item',
                     'historyDetails' => ''
@@ -396,217 +481,438 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
      */
     public function saleStock($items = null)
     {
-        $userId = auth()->id();
-        if ($this->request->getMethod() === 'post' && $this->validateStockEntries('sellitem')) {
-            return $this->validationFail();
-        } else {
+        $userId = (int) auth()->id();
+        $saleDetails = $this->request->getVar('saleDetails') ?? [];
+        $saleDetailsArray = is_array($saleDetails) ? $saleDetails : (array) $saleDetails;
+        $requestedBranchId = $this->request->getVar('branchId') ?? ($saleDetailsArray['branchId'] ?? null);
+        $branchId = $this->branchContext->resolveWritableBranchId($requestedBranchId);
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
+        }
 
-            //   $items = json_decode($items,true);//true is passed to make a real php array not an object
-            $items = $this->request->getVar('saleItems'); //true is passed to make a real php array not an object
-            $saleDetails = $this->request->getVar('saleDetails'); //true is passed to make a real php array not an object
-            $limit = sizeof($items);
-            //Check wether there is items to sell or not
-            if (empty($items)) {
-                $response = [
-                    'status' => false,
-                    'error' => 'ItemsListEmpty',
-                    'message' => 'Items list is empty add an item or items to make a complete transaction'
-                ];
-                return $this->respond($response);
-            } else {
+        if ($this->request->getMethod() !== 'post') {
+            return $this->respond([
+                'status' => false,
+                'error' => 'RequestMethodError',
+                'message' => 'Only POST requests can create sales.'
+            ], 405);
+        }
 
-                $saleData = $items;
-                $items_sold = []; //To store all ids of the sold item for history store
-                $updateItems = [];
-                $saveSaleData = $this->salesModel->insertBatch($saleData);
-                if (empty($saveSaleData)) {
-                    $response = [
-                        'status' => false,
-                        'error' => 'SalesTransactionFailed',
-                        'message' => 'Sales Transaction Failed'
-                    ];
-                    return $this->respond($response);
-                } else {
-                    //Create and Record sale transactionId/timeStamp in the receipt table
-                    $timeStamp = uniqid('RS-', true);
-                    $rcptdata = [
-                        'timeStamp' => $timeStamp,
-                        'discount' => $saleDetails->discount,
-                        'dueAmount' => $saleDetails->dueAmount,
-                        'moreInfo' => $saleDetails->moreInfo,
-                        'paymentMethod' => $saleDetails->paymentMethod,
-                        'amountPaid' => $saleDetails->tenderedAmount,
-                    ];
+        $items = $this->request->getVar('saleItems');
 
-                    // Reflect back / update quantity changes after sales in the stock table
-                    // $updateStock = $this->inventoryModel->updateBatch($saleData, 'itemId');
-                    // if($updateStock){
-                    $this->recordStat(NULL, 'saleStock', $limit);
-                    //Convert the payload properly into an array for proper iteration
-                    $items = json_encode($items); //payload to json string
-                    $items = json_decode($items, true); //payload to an array
-                    $itemSize = sizeof($items);
-                    //find the last sizeof($items) from the sales table
-                    $getSaleIds = $this->salesModel->orderBy('saleDateCreated', 'desc')->findAll($itemSize);
-                    
-                    $receiptNo = $this->receiptModel->insert($rcptdata, true);
-                    //record dues to indebt table for this sale
-                    if($saleDetails->dueAmount > 0){
-  $indebtData = [
-                // 'indebtItemId' => $this->request->getVar('indebtItemId'),
-                'indebtOwner' =>  $userId,
-                // 'quantityDebted' => $this->request->getVar('quantityDebted'),
-                'totalAmount' =>    $saleDetails->total,
-                'initialDeposit' => $saleDetails->tenderedAmount,
-                'endDate' => $saleDetails->endDate,
-                'custId' => $saleDetails->custId,
-                'SR_ID' =>  $receiptNo
-            ];
-             $saveIndebtData = $this->indebtModel->save($indebtData);
+        if (empty($items) || !is_array($items)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'ItemsListEmpty',
+                'message' => 'Items list is empty add an item or items to make a complete transaction'
+            ], 400);
+        }
+
+        try {
+            $calculation = $this->saleCalculator->calculate($items, $saleDetails, $branchId);
+
+            foreach ($calculation['lines'] as $line) {
+                if (!empty($line['custId'])) {
+                    $customer = $this->customerModel->find($line['custId']);
+                    if (!$customer || (int) ($customer['branchId'] ?? 0) !== $branchId) {
+                        throw new InvalidArgumentException('The selected customer does not belong to the active branch.');
                     }
-                    //Attach receiptNumber to each sale
-                    foreach ($getSaleIds as $sale => $key) {
-                        $this->salesModel->set('SR_ID', $receiptNo);
-                        $this->salesModel->where('saleId', $key['saleId']);
-                        $this->salesModel->update();
-                    };
-                    //Update item quantity in the inventory table
-                    foreach ($getSaleIds as $sale => $key) {
-                        $item = $this->inventoryModel->find($key['saleItemId']);
-                        $itemQty = $item['itemQuantity'] - $key['saleQuantity'];
-                        $this->inventoryModel->set('itemQuantity', $itemQty);
-                        $this->inventoryModel->where('itemId', $key['saleItemId']);
-                        $this->inventoryModel->update();
-                    }
-
-                    //Get all item ids into the history for save
-                    foreach ($items as $item => $key) {
-                        foreach ($getSaleIds as $sale => $saleKey) {
-
-                            if ($key['saleItemId'] == $saleKey['saleItemId']) {
-                                $history = [
-                                    'historyItemId' => $key['saleItemId'],
-                                    'busId'         => $userId,
-                                    'historyAction' => $items[0]['saleQuantity'].' Item(s) sold',
-                                    'historyDetails' => $items[0]['custId']
-                                ];
-                                array_push($items_sold, $history);
-                            }
-                        }
-                    }
-                    $saveHistoryData = $this->historyModel->insertBatch($items_sold);
-                    if ($saveHistoryData) {
-                             $payload = [
-                'saleId' => null,
-                'message' => 'Sale created' 
-            ];
-
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('entries-channel', 'sale-created', $payload);
-                        $response = [
-                            'status' => true,
-                            'error' => 'null',
-                            'receiptNumber' => $receiptNo,
-                            'message' => 'transaction completed successfully'
-                        ];
-                        return $this->respond($response);
-                    } else {
-                        $response = [
-                            'status' => false,
-                            'error' => 'History Save error',
-                            'message' => 'Sales history not saved, you need to report this error immediately to our team!'
-                        ];
-                        return $this->respond($response);
-                    }
-                    // }        
                 }
             }
+
+            if ($calculation['dueAmount'] > 0 && empty($calculation['custId'])) {
+                throw new InvalidArgumentException('A customer is required when a sale has an outstanding balance.');
+            }
+
+            if ($calculation['dueAmount'] > 0 && !$this->debtSalesAllowedForBranch($branchId)) {
+                return $this->respond([
+                    'status' => false,
+                    'error' => 'DebtSalesDisabled',
+                    'message' => 'Debt sales are disabled for this branch. Collect full payment or ask an admin to enable debt sales.',
+                    'calculatedTotals' => [
+                        'subtotal' => $calculation['subtotal'],
+                        'discount' => $calculation['discount'],
+                        'total' => $calculation['total'],
+                        'amountPaid' => $calculation['amountPaid'],
+                        'dueAmount' => $calculation['dueAmount'],
+                    ],
+                ], 403);
+            }
+
+            if ($calculation['dueAmount'] > 0 && !$this->saleDebtWasConfirmed($saleDetailsArray)) {
+                return $this->respond([
+                    'status' => false,
+                    'error' => 'DebtConfirmationRequired',
+                    'message' => 'Confirm that the remaining balance should be recorded as customer debt.',
+                    'calculatedTotals' => [
+                        'subtotal' => $calculation['subtotal'],
+                        'discount' => $calculation['discount'],
+                        'total' => $calculation['total'],
+                        'amountPaid' => $calculation['amountPaid'],
+                        'dueAmount' => $calculation['dueAmount'],
+                    ],
+                ], 409);
+            }
+        } catch (InvalidArgumentException $e) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'SaleValidationFailed',
+                'message' => $e->getMessage()
+            ], 400);
+        }
+
+        $db = db_connect();
+        $receiptNo = null;
+        $saleIds = [];
+
+        try {
+            $db->transBegin();
+
+            $timeStamp = uniqid('RS-', true);
+            $receiptNo = $this->receiptModel->insert([
+                'branchId' => $branchId,
+                'createdBy' => $userId,
+                'timeStamp' => $timeStamp,
+                'discount' => $calculation['discount'],
+                'dueAmount' => $calculation['dueAmount'],
+                'moreInfo' => $calculation['moreInfo'] ?? '',
+                'paymentMethod' => $calculation['paymentMethod'] ?? 'cash',
+                'amountPaid' => $calculation['amountPaid'],
+                'receiptStatus' => 'completed',
+            ], true);
+
+            if (!$receiptNo) {
+                throw new RuntimeException('Receipt could not be created.');
+            }
+
+            $historyRows = [];
+            foreach ($calculation['lines'] as $line) {
+                $saleId = $this->salesModel->insert([
+                    'branchId' => $branchId,
+                    'saleItemId' => $line['productId'],
+                    'saleOwner' => $userId,
+                    'SR_ID' => $receiptNo,
+                    'salePrice' => $line['unitPrice'],
+                    'unitCostAtSale' => $line['unitCost'],
+                    'lineCostAtSale' => $line['unitCost'] === null ? null : round($line['unitCost'] * $line['quantity'], 2),
+                    'saleQuantity' => $line['quantity'],
+                    'custId' => $line['custId'],
+                    'saleStatus' => 'completed',
+                ], true);
+
+                if (!$saleId) {
+                    throw new RuntimeException('Sale line could not be created.');
+                }
+
+                $updated = $db->table('inventory')
+                    ->where('branchId', $branchId)
+                    ->where('itemId', $line['productId'])
+                    ->where('itemQuantity >=', $line['quantity'])
+                    ->set('itemQuantity', 'itemQuantity - ' . $line['quantity'], false)
+                    ->update();
+
+                if (!$updated || $db->affectedRows() !== 1) {
+                    throw new RuntimeException('Insufficient stock for product ID ' . $line['productId'] . '.');
+                }
+
+                $updatedProduct = $this->inventoryModel->find($line['productId']);
+                $this->stockLedger->recordProductMovement(
+                    $branchId,
+                    $line['productId'],
+                    'sale',
+                    0,
+                    $line['quantity'],
+                    (float) $updatedProduct['itemQuantity'],
+                    $line['unitCost'],
+                    'receipt',
+                    $receiptNo,
+                    (string) $timeStamp,
+                    $userId
+                );
+
+                $historyRows[] = [
+                    'branchId' => $branchId,
+                    'historyItemId' => $line['productId'],
+                    'busId' => $userId,
+                    'historyAction' => $line['quantity'] . ' Item(s) sold',
+                    'historyDetails' => (string) ($line['custId'] ?? ''),
+                ];
+
+                $saleIds[] = $saleId;
+            }
+
+            if (!empty($historyRows) && !$this->historyModel->insertBatch($historyRows)) {
+                throw new RuntimeException('Sales history could not be saved.');
+            }
+
+            if ($calculation['dueAmount'] > 0) {
+                $firstLine = $calculation['lines'][0];
+                $debtSaved = $this->indebtModel->save([
+                    'branchId' => $branchId,
+                    'indebtItemId' => $firstLine['productId'],
+                    'indebtOwner' => $userId,
+                    'quantityDebted' => array_sum(array_column($calculation['lines'], 'quantity')),
+                    'atPrice' => $calculation['total'],
+                    'totalAmount' => $calculation['total'],
+                    'initialDeposit' => $calculation['amountPaid'],
+                    'endDate' => $calculation['endDate'],
+                    'custId' => $calculation['custId'],
+                    'SR_ID' => $receiptNo,
+                ]);
+
+                if (!$debtSaved) {
+                    throw new RuntimeException('Customer debt could not be recorded.');
+                }
+            }
+
+            $this->recordStat(null, 'saleStock', count($calculation['lines']));
+            $this->auditLog->record(
+                'sale.created',
+                'receipt',
+                $receiptNo,
+                null,
+                [
+                    'receiptNo' => $receiptNo,
+                    'saleIds' => $saleIds,
+                    'totals' => $calculation,
+                ],
+                $userId,
+                $branchId
+            );
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Sale transaction failed.');
+            }
+
+            $db->transCommit();
+
+            $pusher = get_pusher();
+            $pusher->trigger('entries-channel', 'sale-created', [
+                'saleId' => null,
+                'message' => 'Sale created'
+            ]);
+
+            return $this->respond([
+                'status' => true,
+                'error' => null,
+                'receiptNumber' => $receiptNo,
+                'calculatedTotals' => [
+                    'subtotal' => $calculation['subtotal'],
+                    'discount' => $calculation['discount'],
+                    'total' => $calculation['total'],
+                    'amountPaid' => $calculation['amountPaid'],
+                    'dueAmount' => $calculation['dueAmount'],
+                ],
+                'message' => 'transaction completed successfully'
+            ]);
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Sale transaction failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'error' => 'SalesTransactionFailed',
+                'message' => $e instanceof RuntimeException ? $e->getMessage() : 'Sales transaction could not be completed.'
+            ], 409);
         }
     }
 
-    public function updateSales() {
-        $userId = auth()->id();
-        $receiptNumber = $this->request->getVar('SR_ID');
-        $this->salesModel->where('SR_ID', $receiptNumber);
-        $this->salesModel->where('saleOwner', $userId);
-        $sales = $this->salesModel->findAll();
+    private function saleDebtWasConfirmed(array $saleDetails): bool
+    {
+        $value = $saleDetails['confirmDebt'] ?? ($saleDetails['debtConfirmed'] ?? false);
 
-        //Update item quantity in the inventory table
-        foreach ($sales as $sale => $key) {
-            $item = $this->inventoryModel->find($key['saleItemId']);
-            $itemQty = $item['itemQuantity'] + $key['saleQuantity'];
-            $this->inventoryModel->set('itemQuantity', $itemQty);
-            $this->inventoryModel->where('itemId', $key['saleItemId']);
-            $this->inventoryModel->update();
+        if (is_bool($value)) {
+            return $value;
         }
 
-        //Finally delete the sales from the sales table
-        $this->salesModel->where('saleOwner', $userId);
-        $this->salesModel->where('SR_ID', $receiptNumber);
-        $delete = $this->salesModel->delete();
-        print_r($delete);
-        if ($delete) {
-            $response = [
-                'status' => true,
-                'error' => null,
-                'message' => 'Sales deleted successfully'
-            ];
-            return $this->respond($response);
-        } else {
-            $response = [
-                'status' => false,
-                'error' => 'Sale deletion error',
-                'message' => 'Sales deletion not , you need to report this error imediatetly to our team!'
-            ];
-            return $this->respond($response);
+        return in_array(strtolower((string) $value), ['1', 'true', 'yes', 'confirmed'], true);
+    }
+
+    private function debtSalesAllowedForBranch(int $branchId): bool
+    {
+        $db = db_connect();
+
+        if ($db->fieldExists('allowDebtSales', 'branches')) {
+            $branch = $db->table('branches')
+                ->select('allowDebtSales')
+                ->where('branchId', $branchId)
+                ->get()
+                ->getRowArray();
+
+            if ($branch && $branch['allowDebtSales'] !== null && $branch['allowDebtSales'] !== '') {
+                return (int) $branch['allowDebtSales'] === 1;
+            }
         }
+
+        $settings = $this->currentAppSettings();
+
+        return filter_var($settings['allowDebtSales'] ?? true, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function currentAppSettings(): array
+    {
+        $profile = $this->businessModel->orderBy('profileId', 'ASC')->findAll(1);
+        $settings = $profile[0]['appSettings'] ?? null;
+
+        if (!is_string($settings) || trim($settings) === '') {
+            return ['allowDebtSales' => true];
+        }
+
+        $decoded = json_decode($settings, true);
+
+        return is_array($decoded) ? $decoded : ['allowDebtSales' => true];
+    }
+
+    public function updateSales()
+    {
+        return $this->cancelSale();
     }
 
     public function cancelSale()
     {
-        $userId = auth()->id();
+        $userId = (int) auth()->id();
+        $branchId = $this->branchContext->getEffectiveBranchId();
         $receiptNumber = $this->request->getVar('SR_ID');
-        $this->salesModel->where('SR_ID', $receiptNumber);
-        $this->salesModel->where('saleOwner', $userId);
-        $sales = $this->salesModel->findAll();
 
-        //Update item quantity in the inventory table
-        foreach ($sales as $sale => $key) {
-            $item = $this->inventoryModel->find($key['saleItemId']);
-            $itemQty = $item['itemQuantity'] + $key['saleQuantity'];
-            $this->inventoryModel->set('itemQuantity', $itemQty);
-            $this->inventoryModel->where('itemId', $key['saleItemId']);
-            $this->inventoryModel->update();
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
         }
 
-        //Finally delete the sales from the sales table
-        $this->salesModel->where('saleOwner', $userId);
-        $this->salesModel->where('SR_ID', $receiptNumber);
-        $delete = $this->salesModel->delete();
-        print_r($delete);
-        if ($delete) {
-                 $payload = [
-                'saleId' => $receiptNumber,
-                'message' => 'Sale deleted' 
-            ];
+        if (empty($receiptNumber)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'MissingReceipt',
+                'message' => 'Receipt number is required.'
+            ], 400);
+        }
 
-            // Trigger the event via Pusher
+        $this->salesModel->where('SR_ID', $receiptNumber);
+        $this->salesModel->where('saleOwner', $userId);
+        $this->salesModel
+            ->groupStart()
+                ->where('saleStatus <>', 'cancelled')
+                ->orWhere('saleStatus IS NULL', null, false)
+            ->groupEnd();
+        if ($branchId !== null) {
+            $this->salesModel->where('branchId', $branchId);
+        }
+        $sales = $this->salesModel->findAll();
+
+        if (empty($sales)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'SaleNotFound',
+                'message' => 'No sale lines were found for this receipt.'
+            ], 404);
+        }
+
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            $debts = $this->indebtModel->where('SR_ID', $receiptNumber)->findAll();
+            foreach ($debts as $debt) {
+                $payments = $this->debtTrackModel->where('debtId', $debt['indebtId'])->countAllResults();
+                if ($payments > 0) {
+                    throw new RuntimeException('This sale has debt payments and cannot be cancelled without a payment reversal.');
+                }
+                $this->indebtModel->delete($debt['indebtId']);
+            }
+
+            foreach ($sales as $saleLine) {
+                $updated = $db->table('inventory')
+                    ->where('branchId', $branchId)
+                    ->where('itemId', $saleLine['saleItemId'])
+                    ->set('itemQuantity', 'itemQuantity + ' . (float) $saleLine['saleQuantity'], false)
+                    ->update();
+
+                if (!$updated || $db->affectedRows() !== 1) {
+                    throw new RuntimeException('Could not restore stock for product ID ' . $saleLine['saleItemId'] . '.');
+                }
+
+                $updatedProduct = $this->inventoryModel->find($saleLine['saleItemId']);
+                $this->stockLedger->recordProductMovement(
+                    (int) $branchId,
+                    (int) $saleLine['saleItemId'],
+                    'sale_reversal',
+                    (float) $saleLine['saleQuantity'],
+                    0,
+                    (float) $updatedProduct['itemQuantity'],
+                    isset($updatedProduct['itemStockPrice']) ? (float) $updatedProduct['itemStockPrice'] : null,
+                    'receipt',
+                    $receiptNumber,
+                    'RS-' . $receiptNumber,
+                    $userId
+                );
+            }
+
+            $cancelledAt = date('Y-m-d H:i:s');
+            $cancelSalesBuilder = $db->table('sales')
+                ->where('saleOwner', $userId)
+                ->where('SR_ID', $receiptNumber)
+                ->groupStart()
+                    ->where('saleStatus <>', 'cancelled')
+                    ->orWhere('saleStatus IS NULL', null, false)
+                ->groupEnd();
+            if ($branchId !== null) {
+                $cancelSalesBuilder->where('branchId', $branchId);
+            }
+
+            if (!$cancelSalesBuilder->update([
+                'saleStatus' => 'cancelled',
+                'cancelledAt' => $cancelledAt,
+                'cancelledBy' => $userId,
+            ])) {
+                throw new RuntimeException('Sale rows could not be marked as cancelled.');
+            }
+
+            $this->receiptModel->update($receiptNumber, [
+                'receiptStatus' => 'cancelled',
+                'cancelledAt' => $cancelledAt,
+                'cancelledBy' => $userId,
+            ]);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Sale cancellation status update failed.');
+            }
+
+            $this->auditLog->record(
+                'sale.cancelled',
+                'receipt',
+                $receiptNumber,
+                ['sales' => $sales, 'debts' => $debts],
+                null,
+                $userId,
+                $branchId ? (int) $branchId : null
+            );
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Sale cancellation transaction failed.');
+            }
+
+            $db->transCommit();
+
             $pusher = get_pusher();
-            $pusher->trigger('entries-channel', 'sale-deleted', $payload);
-            $response = [
+            $pusher->trigger('entries-channel', 'sale-deleted', [
+                'saleId' => $receiptNumber,
+                'message' => 'Sale deleted'
+            ]);
+
+            return $this->respond([
                 'status' => true,
                 'error' => null,
-                'message' => 'Sales deleted successfully'
-            ];
-            return $this->respond($response);
-        } else {
-            $response = [
+                'message' => 'Sales cancelled successfully'
+            ]);
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Sale cancellation failed: ' . $e->getMessage());
+
+            return $this->respond([
                 'status' => false,
-                'error' => 'Sale deletion error',
-                'message' => 'Sales deletion not , you need to report this error imediatetly to our team!'
-            ];
-            return $this->respond($response);
+                'error' => 'SaleCancellationFailed',
+                'message' => $e->getMessage()
+            ], 409);
         }
     }
 
@@ -617,69 +923,150 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
      */
     public function createDebt($debtData=null)
     {
-        $userId = auth()->id();
-        $dbReceipt = null;
-        $indebtData = [];
-        if ($this->request->getMethod() === 'post') {
-            //Create and Record debt transactionId/timeStamp in the receipt table
+        $userId = (int) auth()->id();
+        $branchId = $this->branchContext->getEffectiveBranchId();
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
+        }
+
+        if ($this->request->getMethod() !== 'post') {
+            return $this->respond(['status' => false, 'message' => 'Only POST requests can create debts.'], 405);
+        }
+
+        $productId = (int) $this->request->getVar('indebtItemId');
+        $quantity = (float) $this->request->getVar('quantityDebted');
+        $initialDeposit = (float) $this->request->getVar('initialDeposit');
+        $customerId = (int) $this->request->getVar('custId');
+        $inventoryItem = $this->inventoryModel->find($productId);
+        $customer = $customerId ? $this->customerModel->find($customerId) : null;
+
+        if ($productId <= 0 || $quantity <= 0 || $initialDeposit < 0 || $customerId <= 0) {
+            return $this->respond(['status' => false, 'message' => 'Product, customer, quantity, and deposit must be valid.'], 400);
+        }
+        if (!$inventoryItem || (int) ($inventoryItem['branchId'] ?? 0) !== $branchId) {
+            return $this->respond(['status' => false, 'message' => 'Selected product does not belong to the active branch.'], 403);
+        }
+        if (!$customer || (int) ($customer['branchId'] ?? 0) !== $branchId) {
+            return $this->respond(['status' => false, 'message' => 'Selected customer does not belong to the active branch.'], 403);
+        }
+
+        $minimumPrice = (float) ($inventoryItem['itemLeastPrice'] ?? 0);
+        $submittedPrice = is_numeric($this->request->getVar('atPrice')) ? (float) $this->request->getVar('atPrice') : $minimumPrice;
+        if ($submittedPrice < $minimumPrice) {
+            return $this->respond(['status' => false, 'message' => 'Debt sale price cannot be below the configured minimum price.'], 400);
+        }
+
+        $totalAmount = round($submittedPrice * $quantity, 2);
+        if ($initialDeposit > $totalAmount) {
+            return $this->respond(['status' => false, 'message' => 'Initial deposit cannot exceed the calculated debt total.'], 400);
+        }
+
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
             $timeStamp = uniqid('DBT-', true);
-            $rcptdata = [
-                'timeStamp' => $timeStamp
-            ];
-            $receiptNo = $this->receiptModel->insert($rcptdata, true);
+            $receiptNo = $this->receiptModel->insert([
+                'branchId' => $branchId,
+                'createdBy' => $userId,
+                'timeStamp' => $timeStamp,
+                'discount' => 0,
+                'dueAmount' => $totalAmount - $initialDeposit,
+                'moreInfo' => 'Debt sale',
+                'paymentMethod' => 'credit',
+                'amountPaid' => $initialDeposit,
+                'receiptStatus' => 'completed',
+            ], true);
 
-            if($receiptNo){
-                $dbReceipt = $receiptNo;
+            if (!$receiptNo) {
+                throw new RuntimeException('Debt receipt could not be created.');
             }
-            else{
-                $response = [
-                    'status' => false,
-                    'error' => 'RecieptInssertionError',
-                    'message' => 'TID inssertion failed'
-                ];
 
-                return $response;
-            }
-            // if($debtData === null){
-   $indebtData = [
-                'indebtItemId' => $this->request->getVar('indebtItemId'),
-                'indebtOwner' =>  $userId,
-                'quantityDebted' => $this->request->getVar('quantityDebted'),
-                'atPrice' =>    $this->request->getVar('atPrice'),
-                'initialDeposit' => $this->request->getVar('initialDeposit'),
-                'totalAmount' => $this->request->getVar('totalAmount'),
+            $debtId = $this->indebtModel->insert([
+                'branchId' => $branchId,
+                'indebtItemId' => $productId,
+                'indebtOwner' => $userId,
+                'quantityDebted' => $quantity,
+                'atPrice' => $submittedPrice,
+                'initialDeposit' => $initialDeposit,
+                'totalAmount' => $totalAmount,
                 'endDate' => $this->request->getVar('endDate'),
-                'custId' => $this->request->getVar('custId'),
-                'SR_ID' =>  $dbReceipt
-            ];
-            // }
-            // else{
-            //     $indebtData = $debtData;
-            // }
+                'custId' => $customerId,
+                'SR_ID' => $receiptNo,
+            ], true);
 
-            $saveIndebtData = $this->indebtModel->save($indebtData);
-            if ($saveIndebtData) {
-                //update item Quantity in the inventory table
-                $item = $this->inventoryModel->find($this->request->getVar('indebtItemId'));
-                $itemQty = $item['itemQuantity'] -  $this->request->getVar('quantityDebted');
-                $this->inventoryModel->set('itemQuantity', $itemQty);
-                $this->inventoryModel->where('itemId', $this->request->getVar('indebtItemId'));
-                $this->inventoryModel->update();
-                $response = [
-                    'status' => true,
-                    'error' => 'null',
-                    'message' => 'Your item(s) have been added to your debts. To setup your alerts and client SMS notifications, please visit the Alerts and Notification panel...!'
-                ];
-                $this->recordStat($this->request->getVar('indebtItemId'), 'addDebt', NULL);
-                return $this->respond($response);
-            } else {
-                $response = [
-                    'status' => false,
-                    'error' => 'debtNotAdded',
-                    'message' => 'Fail! We could not process your debt order now. Check all entries and try again!'
-                ];
-                return $this->respond($response);
+            if (!$debtId) {
+                throw new RuntimeException('Debt record could not be created.');
             }
+
+            $updated = $db->table('inventory')
+                ->where('branchId', $branchId)
+                ->where('itemId', $productId)
+                ->where('itemQuantity >=', $quantity)
+                ->set('itemQuantity', 'itemQuantity - ' . $quantity, false)
+                ->update();
+
+            if (!$updated || $db->affectedRows() !== 1) {
+                throw new RuntimeException('Insufficient stock for this debt sale.');
+            }
+
+            $updatedProduct = $this->inventoryModel->find($productId);
+            $this->stockLedger->recordProductMovement(
+                $branchId,
+                $productId,
+                'debt_sale',
+                0,
+                $quantity,
+                (float) $updatedProduct['itemQuantity'],
+                isset($inventoryItem['itemStockPrice']) ? (float) $inventoryItem['itemStockPrice'] : null,
+                'debt',
+                $debtId,
+                (string) $timeStamp,
+                $userId
+            );
+
+            $this->recordStat($productId, 'addDebt', null);
+            $this->auditLog->record(
+                'debt.created',
+                'indebt',
+                $debtId,
+                null,
+                [
+                    'debtId' => $debtId,
+                    'receiptNo' => $receiptNo,
+                    'productId' => $productId,
+                    'quantity' => $quantity,
+                    'totalAmount' => $totalAmount,
+                    'initialDeposit' => $initialDeposit,
+                ],
+                $userId,
+                $branchId
+            );
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Debt transaction failed.');
+            }
+
+            $db->transCommit();
+
+            return $this->respond([
+                'status' => true,
+                'error' => null,
+                'receiptNumber' => $receiptNo,
+                'debtId' => $debtId,
+                'calculatedTotal' => $totalAmount,
+                'message' => 'Your item(s) have been added to your debts.'
+            ]);
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Debt creation failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'error' => 'DebtTransactionFailed',
+                'message' => $e->getMessage()
+            ], 409);
         }
     }
 
@@ -687,71 +1074,131 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
 
     public function payDebt()
     {
-        $userId = auth()->id();
+        $userId = (int) auth()->id();
+        $branchId = $this->branchContext->getEffectiveBranchId();
         $debtId = $this->request->getVar('transactionId');
-        $newPay = $this->request->getVar('amountPaid');
-        $data = [
-            'debtId' => $this->request->getVar('transactionId'),
-            'indebtOwner' => $userId,
-            'amountPaid' => $this->request->getVar('amountPaid'),
-        ];
+        $newPay = (float) $this->request->getVar('amountPaid');
+
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
+        }
 
         $debt = $this->indebtModel->find($debtId);
-        $oldPay = $debt['initialDeposit'];
-        $totalPay = $debt['totalAmount'];
+        if (!$this->branchContext->recordMatchesCurrentBranch($debt)) {
+            return $this->respond(['status' => false, 'message' => 'This debt record is outside your current branch scope.'], 403);
+        }
+        if ($newPay <= 0) {
+            return $this->respond(['status' => false, 'message' => 'Payment amount must be positive.'], 400);
+        }
+
+        $oldPay = (float) $debt['initialDeposit'];
+        $totalPay = (float) $debt['totalAmount'];
         $saleItemId =  $debt['indebtItemId'];
-        $saleQty = $debt['quantityDebted'];
+        $saleQty = (float) $debt['quantityDebted'];
         $custId = $debt['custId'];
         $updatedPay = $oldPay + $newPay;
 
-        $saleData = [
-            'saleItemId' => $saleItemId,
-            'saleOwner' =>  $userId,
-            'salePrice' => $totalPay,
-            'saleQuantity' => $saleQty,
-            'custId' => $custId,
-        ];
+        if ($updatedPay > $totalPay) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'OverPayment',
+                'message' => 'Cash paid exceeds the outstanding amount.'
+            ], 400);
+        }
 
-        if ($updatedPay <= $totalPay) {
-            $this->indebtModel->Set('initialDeposit', $updatedPay);
-            $this->indebtModel->where('indebtId',  $debtId);
-            $paymentUpdate = $this->indebtModel->update();
-            if ($paymentUpdate) {
-                $paid = $this->debtTrackModel->save($data);
+        $db = db_connect();
 
-                if ($paid) {
-                    //Save the debt as a sale if the payment is fullfilled
-                    $ispaid = false;
-                    if ($totalPay == $updatedPay) {
-                        $saveSaleData = $this->salesModel->save($saleData);
-                        $ispaid = true;
-                        if ($saveSaleData) {
-                            $this->recordStat(NULL, 'saleStock', 1);
-                        }
-                    }
-                    $response = [
-                        'status' => true,
-                        'error' => 'null',
-                        'message' => 'Payment fullfilled...',
-                        'isPaidFully' => $ispaid
-                    ];
-                    return $this->respond($response);
-                } else {
-                    $response = [
-                        'status' => false,
-                        'error' => 'PaymentFailed',
-                        'message' => 'Fail! We could not process your payment order now. try again...!'
-                    ];
-                    return $this->respond($response);
-                }
-            } else {
-                $response = [
-                    'status' => false,
-                    'error' => 'OverPayment',
-                    'message' => 'Aready Paid or cash paid exceeds the amount to be paid!'
-                ];
-                return $this->respond($response);
+        try {
+            $db->transBegin();
+
+            $paymentUpdate = $this->indebtModel
+                ->where('indebtId', $debtId)
+                ->where('initialDeposit', $oldPay)
+                ->set('initialDeposit', $updatedPay)
+                ->update();
+
+            if (!$paymentUpdate || $db->affectedRows() !== 1) {
+                throw new RuntimeException('Debt payment could not be applied. The debt may have changed; refresh and try again.');
             }
+
+            $paymentId = $this->debtTrackModel->insert([
+                'debtId' => $debtId,
+                'indebtOwner' => $userId,
+                'amountPaid' => $newPay,
+            ], true);
+
+            if (!$paymentId) {
+                throw new RuntimeException('Debt payment history could not be recorded.');
+            }
+
+            $isPaidFully = false;
+            if (round($totalPay, 2) === round($updatedPay, 2)) {
+                if ($saleQty <= 0) {
+                    throw new RuntimeException('Debt quantity is invalid.');
+                }
+
+                $unitPrice = round($totalPay / $saleQty, 2);
+                $saleProduct = $this->inventoryModel->find($saleItemId);
+                $unitCostAtSale = isset($saleProduct['itemStockPrice']) ? (float) $saleProduct['itemStockPrice'] : null;
+                $saleSaved = $this->salesModel->insert([
+                    'branchId' => $branchId,
+                    'saleItemId' => $saleItemId,
+                    'saleOwner' => $userId,
+                    'SR_ID' => $debt['SR_ID'] ?? null,
+                    'salePrice' => $unitPrice,
+                    'unitCostAtSale' => $unitCostAtSale,
+                    'lineCostAtSale' => $unitCostAtSale === null ? null : round($unitCostAtSale * $saleQty, 2),
+                    'saleQuantity' => $saleQty,
+                    'custId' => $custId,
+                    'saleStatus' => 'completed',
+                ], true);
+
+                if (!$saleSaved) {
+                    throw new RuntimeException('Fully paid debt could not be converted to a sale.');
+                }
+
+                $this->recordStat(null, 'saleStock', 1);
+                $isPaidFully = true;
+            }
+
+            $this->auditLog->record(
+                'debt.payment_recorded',
+                'indebt',
+                $debtId,
+                $debt,
+                [
+                    'debtId' => $debtId,
+                    'paymentId' => $paymentId,
+                    'amountPaid' => $newPay,
+                    'totalPaid' => $updatedPay,
+                    'isPaidFully' => $isPaidFully,
+                ],
+                $userId,
+                $branchId ? (int) $branchId : null
+            );
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Debt payment transaction failed.');
+            }
+
+            $db->transCommit();
+
+            return $this->respond([
+                'status' => true,
+                'error' => null,
+                'message' => 'Payment fulfilled.',
+                'isPaidFully' => $isPaidFully,
+                'remainingBalance' => round($totalPay - $updatedPay, 2),
+            ]);
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Debt payment failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'error' => 'PaymentFailed',
+                'message' => $e->getMessage()
+            ], 409);
         }
     }
 
@@ -765,7 +1212,7 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
         //delete stock item
         $data = $this->inventoryModel->find($id);
 
-        if ($data) {
+        if ($data && $this->branchContext->recordMatchesCurrentBranch($data)) {
             $del_stock_item = $this->inventoryModel->delete($id);
 
             $historyData = [
@@ -830,12 +1277,16 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
     private function recordStat($item_id = NULL, $action = NULL, $limit = NULL)
     {
         $userId = auth()->id();
+        $branchId = $this->branchContext->getEffectiveBranchId();
         $itemStockWorth = 0;
         $itemQty = 0;
         $statId = null;
         if ($item_id === NULL && ($action === 'update' || $action === 'createStock')) {
             if ($item_id === Null) {
                 $this->inventoryModel->orderBy('itemId', 'DESC');
+                if ($branchId !== null) {
+                    $this->inventoryModel->where('branchId', $branchId);
+                }
                 $fetchedData = $this->inventoryModel->findAll(1);
                 $item_id = $fetchedData[0]['itemId'];
                 $itemStockWorth = $fetchedData[0]['itemQuantity'] * $fetchedData[0]['itemStockPrice'];
@@ -849,6 +1300,7 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
             }
 
             $statData = [
+                'branchId' => $branchId,
                 'statItemId' => $item_id,
                 'busId' => $userId,
                 'statItemStock' => $itemQty,
@@ -884,6 +1336,9 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
         //update stock stats 
         if ($action === 'addStock') {
             $this->stockModel->orderBy('stockId', 'DESC');
+            if ($branchId !== null) {
+                $this->stockModel->where('branchId', $branchId);
+            }
             $fetchedStock = $this->stockModel->findAll(1);
             $stat = $this->statisticsModel->where('statItemId', $item_id)->findAll(1);
             // $itemStockWorth = $stat[0]['statItemStockWorth'] + ($fetchedStock[0]['stockItemQuantity'] * $fetchedStock[0]['stockItemPrice']);
@@ -927,6 +1382,9 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
         //update debt stats 
         if ($action === 'addDebt') {
             $this->indebtModel->orderBy('indebtId', 'DESC');
+            if ($branchId !== null) {
+                $this->indebtModel->where('branchId', $branchId);
+            }
             $fetchedDebt = $this->indebtModel->findAll(1);
             $stat = $this->statisticsModel->where('statItemId', $item_id)->findAll(1);
             $itemStockWorth = $stat[0]['statItemIndebtWorth'] + ($fetchedDebt[0]['quantityDebted'] * $fetchedDebt[0]['atPrice']);
@@ -969,6 +1427,14 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
             $userId = auth()->id();
             $this->salesModel->orderBy('saleId', 'DESC');
             $this->salesModel->where('saleOwner', $userId);
+            $this->salesModel
+                ->groupStart()
+                    ->where('saleStatus <>', 'cancelled')
+                    ->orWhere('saleStatus IS NULL', null, false)
+                ->groupEnd();
+            if ($branchId !== null) {
+                $this->salesModel->where('branchId', $branchId);
+            }
             $fetchedSales = $this->salesModel->findAll($limit);
             foreach ($fetchedSales as $sale => $item) {
                 $stat = $this->statisticsModel->where('statItemId',  $item['saleItemId'])->findAll(1);
@@ -1050,6 +1516,34 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
                     'rules' => 'max_length[50]|trim|min_length[2]',
                     'label' => 'Item Model'
                 ],
+                'item_sku' => [
+                    'rules' => 'permit_empty|max_length[80]|trim',
+                    'label' => 'Item SKU'
+                ],
+                'item_barcode' => [
+                    'rules' => 'permit_empty|max_length[120]|trim',
+                    'label' => 'Item Barcode'
+                ],
+                'item_brand' => [
+                    'rules' => 'permit_empty|max_length[120]|trim',
+                    'label' => 'Item Brand'
+                ],
+                'item_product_type' => [
+                    'rules' => 'permit_empty|in_list[purchased,produced,service]',
+                    'label' => 'Product Type'
+                ],
+                'item_unit' => [
+                    'rules' => 'permit_empty|max_length[30]|trim',
+                    'label' => 'Unit'
+                ],
+                'item_supplier' => [
+                    'rules' => 'permit_empty|max_length[150]|trim',
+                    'label' => 'Supplier'
+                ],
+                'item_reorder_level' => [
+                    'rules' => 'permit_empty|numeric|greater_than_equal_to[0]',
+                    'label' => 'Reorder Level'
+                ],
                 'item_quality' => [
                     'rules' => 'required|max_length[50]|trim',
                     'label' => 'Item Quality'
@@ -1074,6 +1568,14 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
                 //     'rules' => 'required|max_length[11]|numeric|min_length[2]|trim|greater_than[500]',
                 //     'label' => 'Item Sale Price'
                 // ],
+                'item_stock_price' => [
+                    'rules' => 'permit_empty|numeric|greater_than_equal_to[0]',
+                    'label' => 'Cost Price'
+                ],
+                'item_wholesale_price' => [
+                    'rules' => 'permit_empty|numeric|greater_than_equal_to[0]',
+                    'label' => 'Wholesale Price'
+                ],
                 'item_notes' => [
                     'rules' => 'max_length[1500]|min_length[3]|trim',
                     'label' => 'Item Notes'
@@ -1102,6 +1604,34 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
                     'rules' => 'max_length[50]|trim|min_length[2]',
                     'label' => 'Item Model'
                 ],
+                'item_sku' => [
+                    'rules' => 'permit_empty|max_length[80]|trim',
+                    'label' => 'Item SKU'
+                ],
+                'item_barcode' => [
+                    'rules' => 'permit_empty|max_length[120]|trim',
+                    'label' => 'Item Barcode'
+                ],
+                'item_brand' => [
+                    'rules' => 'permit_empty|max_length[120]|trim',
+                    'label' => 'Item Brand'
+                ],
+                'item_product_type' => [
+                    'rules' => 'permit_empty|in_list[purchased,produced,service]',
+                    'label' => 'Product Type'
+                ],
+                'item_unit' => [
+                    'rules' => 'permit_empty|max_length[30]|trim',
+                    'label' => 'Unit'
+                ],
+                'item_supplier' => [
+                    'rules' => 'permit_empty|max_length[150]|trim',
+                    'label' => 'Supplier'
+                ],
+                'item_reorder_level' => [
+                    'rules' => 'permit_empty|numeric|greater_than_equal_to[0]',
+                    'label' => 'Reorder Level'
+                ],
                 'item_quality' => [
                     'rules' => 'max_length[50]|trim',
                     'label' => 'Item Quality'
@@ -1120,7 +1650,15 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
                 ],
                 'item_min_price' => [
                     'rules' => 'required|max_length[11]|numeric|min_length[2]|trim|greater_than[49]',
-                    'label' => 'Item Buy Price'
+                    'label' => 'Retail Price'
+                ],
+                'item_stock_price' => [
+                    'rules' => 'permit_empty|numeric|greater_than_equal_to[0]',
+                    'label' => 'Cost Price'
+                ],
+                'item_wholesale_price' => [
+                    'rules' => 'permit_empty|numeric|greater_than_equal_to[0]',
+                    'label' => 'Wholesale Price'
                 ],
                 'item_notes' => [
                     'rules' => 'max_length[1500]|min_length[3]|trim',
@@ -1156,5 +1694,27 @@ $insertBatchQuery = $this->stockModel->insertBatch($batchData);
         } else {
             echo "Nothing";
         }
+    }
+
+    private function normalizeBranchId($branchId)
+    {
+        $branchId = trim((string) $branchId);
+        return $branchId === '' ? null : (int) $branchId;
+    }
+
+    private function nullableString($value): ?string
+    {
+        $value = trim((string) $value);
+
+        return $value === '' ? null : $value;
+    }
+
+    private function optionalNumber($value, $fallback)
+    {
+        if ($value === null || $value === '') {
+            return $fallback;
+        }
+
+        return is_numeric($value) ? $value : $fallback;
     }
 }

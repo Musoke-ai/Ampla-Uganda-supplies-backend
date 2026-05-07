@@ -2,260 +2,217 @@
 
 namespace App\Controllers;
 
-use CodeIgniter\RESTful\ResourceController;
 use App\Models\Expense;
+use App\Services\BranchContextService;
+use CodeIgniter\RESTful\ResourceController;
 
 class ExpensesController extends ResourceController
 {
-      /** This controller holds the following functions
-        = Check presence of data
-        = Validation check
-        = CRUD a stock
-        = Fetch stock
-    **/
+    private Expense $expenseModel;
+    private BranchContextService $branchContext;
 
-    private $expenseModel;
-    public function __construct(){
+    public function __construct()
+    {
         $this->expenseModel = new Expense();
+        $this->branchContext = service('branchContext');
     }
 
-    // fetch categories data
-    public function noExpensesData(){
-        $response = [
+    public function noExpensesData()
+    {
+        return $this->respond([
             'status' => false,
             'error' => 'noData',
-            'message' => 'There is nothing in the expense table. Add new stock and try again.'
-        ];
-        return $this->respond($response);
+            'message' => 'There is nothing in the expense table. Add a new expense and try again.',
+        ]);
     }
 
-     // return resource object for validation failure
-    public function validationFail(){
-        $response = [
-            'status' => false,
-            'error' => 'validationError',
-            'message' => $this->validator->getErrors()
-        ];
-        return $this->respond($response);
-    }
-
-    /**
-     * Return an array of resource objects, themselves in array format
-     *
-     * @return mixed
-     */
     public function index()
     {
-        //fetch stock
-        $expenseData =  $this->expenseModel->findAll();
-        if(empty($expenseData)){
+        $expenses = $this->branchContext
+            ->scopeBuilder($this->expenseModel->orderBy('expenseDateCreated', 'DESC'))
+            ->findAll();
+
+        if (empty($expenses)) {
             return $this->noExpensesData();
         }
-        else{
-            $response = [
-                'status' => true,
-                'error' => null,
-                'message' => 'Success!! expenses have been fetched to your front end.' 
-            ];
-            return $this->respond($expenseData);
-        }
+
+        return $this->respond($expenses);
     }
 
-    /**
-     * Return the properties of a resource object
-     *
-     * @return mixed
-     */
     public function addExpense()
     {
-        $data = [];
-        if($this->request->getMethod() === 'post'){
-               $data = [
-               'category' => $this->request->getVar('category'),
-               'description' => $this->request->getVar('description'),
-               'amount' => $this->request->getVar('amount'),
-               'givenTo' => $this->request->getVar('givenTo'),
-               'remarks' => $this->request->getVar('remarks'),
-               
-           ];
-        $insertQuery =  $rawMaterialData =  $this->expenseModel->insert($data);
-        if(empty($insertQuery)){
-            $response = [
-                'status' => false,
-                'error' => 'ExpenseFail',
-                'message' => 'Expense not added into the table and error occured or check all fields and try again!'
-            ];
-            return $this->respond($response);
-        }
-        else{
-              $payload = [
-                'expId' => null,
-                'message' => 'Expense created' 
-            ];
-
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('expense-channel', 'expense-created', $payload);
-            $response = [
-                'status' => true,
-                'error' => 'null',
-                'message' => 'Expense successfully added in the table.'
-            ];
-            return $this->respond($response);
-        }
- 
-}
-else{
-    $response = [
-        'status' => false,
-        'error' => 'RequestMethodError',
-        'message' => 'The request method is not post set it to post and try again.'
-    ];
-    return $this->respond($response);
-}
-    }
-
-
-    /**
-     * Return the editable properties of a resource object
-     *
-     * @return mixed
-     */
-    public function edit($id = null)
-    {
-        //fetch category to edit
-        $data = $this->expenseModel->find($id);
-
-        if(empty($data)){
-           return $this->noExpensesData();
-        }
-        // in case a category is found
-        else{
-            return $this->respond($data);
-        }
-    }
-
-    /**
-     * Add or update a model resource, from "posted" properties
-     *
-     * @return mixed
-     */
-    public function update($id = null)
-    {
-        // Fetch and trim ID
-        $id = trim($this->request->getVar('id'));
-        
-        // Check if the ID is valid
-        if (!$id || !$this->expenseModel->find($id)) {
+        if ($this->request->getMethod() !== 'post') {
             return $this->respond([
                 'status' => false,
-                'error' => 'invalidId',
-                'message' => 'Invalid or missing expense ID.'
-            ]);
+                'error' => 'RequestMethodError',
+                'message' => 'The request method is not POST. Set it to POST and try again.',
+            ], 405);
         }
-    
-        // Validate input
-        if (!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())) {
+
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
+        if ($branchId === null) {
             return $this->respond([
                 'status' => false,
-                'error' => 'validationFailed',
-                'message' => 'Validation failed. Please check your input and try again.'
-            ]);
+                'error' => 'MissingBranch',
+                'message' => 'Select a current branch before recording an expense.',
+            ], 422);
         }
-    
-        // Prepare data
-        $expenseUpdateData = [
+
+        $data = [
+            'branchId' => $branchId,
             'category' => $this->request->getVar('category'),
             'description' => $this->request->getVar('description'),
             'amount' => $this->request->getVar('amount'),
             'givenTo' => $this->request->getVar('givenTo'),
             'remarks' => $this->request->getVar('remarks'),
         ];
-    
-        // Ensure data is not empty before updating
-        if (empty(array_filter($expenseUpdateData))) {
-            return $this->respond([
-                'status' => false,
-                'error' => 'emptyData',
-                'message' => 'There is no data to update. Please provide at least one field to modify.'
-            ]);
-        }
-    
-        // Correct update method call with ID
-        if (!$this->expenseModel->update($id, $expenseUpdateData)) {
-            return $this->respond([
-                'status' => false,
-                'error' => 'rawMaterialUpdateFail',
-                'message' => 'Fail! Expense update failed. Please try again later.'
-            ]);
-        }
-      $payload = [
-                'expId' => $id,
-                'message' => 'Expense updated' 
-            ];
 
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('expense-channel', 'expense-updated', $payload);
-        // Success response
+        if (!$this->expenseModel->insert($data)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'ExpenseFail',
+                'message' => 'Expense was not added. Check all fields and try again.',
+            ], 422);
+        }
+
+        $id = $this->expenseModel->getInsertID();
+        get_pusher()->trigger('expense-channel', 'expense-created', [
+            'expId' => $id,
+            'branchId' => $branchId,
+            'message' => 'Expense created',
+        ]);
+
         return $this->respond([
             'status' => true,
             'error' => null,
-            'message' => 'Success!! Expense has been updated'
+            'message' => 'Expense successfully added.',
+            'data' => ['id' => $id, 'branchId' => $branchId],
         ]);
     }
-    
 
-    /**
-     * Delete the designated resource object from the model
-     *
-     * @return mixed
-     */
+    public function edit($id = null)
+    {
+        $data = $this->expenseModel->find($id);
+
+        if (!$data || !$this->recordIsInScope($data)) {
+            return $this->noExpensesData();
+        }
+
+        return $this->respond($data);
+    }
+
+    public function update($id = null)
+    {
+        $id = trim((string) $this->request->getVar('id'));
+        $expense = $id ? $this->expenseModel->find($id) : null;
+
+        if (!$expense) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'invalidId',
+                'message' => 'Invalid or missing expense ID.',
+            ], 404);
+        }
+
+        if (!$this->recordIsInScope($expense)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'branchScope',
+                'message' => 'This expense is outside your current branch scope.',
+            ], 403);
+        }
+
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'))
+            ?? (int) ($expense['branchId'] ?? 0);
+
+        if ($branchId === null || $branchId <= 0) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'MissingBranch',
+                'message' => 'Select a current branch before updating this expense.',
+            ], 422);
+        }
+
+        $expenseUpdateData = [
+            'branchId' => $branchId,
+            'category' => $this->request->getVar('category'),
+            'description' => $this->request->getVar('description'),
+            'amount' => $this->request->getVar('amount'),
+            'givenTo' => $this->request->getVar('givenTo'),
+            'remarks' => $this->request->getVar('remarks'),
+        ];
+
+        if (!$this->expenseModel->update($id, $expenseUpdateData)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'expenseUpdateFail',
+                'message' => 'Expense update failed. Please try again later.',
+            ], 422);
+        }
+
+        get_pusher()->trigger('expense-channel', 'expense-updated', [
+            'expId' => $id,
+            'branchId' => $branchId,
+            'message' => 'Expense updated',
+        ]);
+
+        return $this->respond([
+            'status' => true,
+            'error' => null,
+            'message' => 'Expense has been updated.',
+        ]);
+    }
+
     public function delete($id = null)
-{
-    // Fetch and trim ID
-    $id = trim($this->request->getVar('id'));
+    {
+        $id = trim((string) $this->request->getVar('id'));
+        $expense = $id ? $this->expenseModel->find($id) : null;
 
-    // Check if the ID is valid
-    if (!$id || !$this->expenseModel->find($id)) {
+        if (!$expense) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'invalidId',
+                'message' => 'Invalid or missing expense ID.',
+            ], 404);
+        }
+
+        if (!$this->recordIsInScope($expense)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'branchScope',
+                'message' => 'This expense is outside your current branch scope.',
+            ], 403);
+        }
+
+        if (!$this->expenseModel->delete($id)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'deleteFail',
+                'message' => 'Expense has not been deleted. Please try again later.',
+            ], 422);
+        }
+
+        get_pusher()->trigger('expense-channel', 'expense-deleted', [
+            'expId' => $id,
+            'branchId' => $expense['branchId'] ?? null,
+            'message' => 'Expense deleted',
+        ]);
+
         return $this->respond([
-            'status' => false,
-            'error' => 'invalidId',
-            'message' => 'Invalid or missing raw material ID.'
+            'status' => true,
+            'error' => null,
+            'message' => 'Selected expense has been deleted.',
         ]);
     }
 
-    // Perform delete operation
-    if (!$this->expenseModel->delete($id)) {
-        return $this->respond([
-            'status' => false,
-            'error' => 'deleteFail',
-            'message' => 'Fail! Expense has not been deleted. Please try again later.'
-        ]);
-    }
-  $payload = [
-                'expId' => $id,
-                'message' => 'Expense deleted' 
-            ];
+    private function recordIsInScope(array $record): bool
+    {
+        $effectiveBranchId = $this->branchContext->getEffectiveBranchId();
 
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('expense-channel', 'expense-deleted', $payload);
-    // Success response
-    return $this->respond([
-        'status' => true,
-        'error' => null,
-        'message' => 'Success!! Selected expense has been deleted.'
-    ]);
-}
+        if ($effectiveBranchId === null) {
+            return $this->branchContext->canUserSwitchBranches();
+        }
 
-
-    // validate raw material form entries
-    private function validateCategoryEntries(){
-            return $this->validate([
-                'category' => [
-                    'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim|is_unique[categories.categoryName]'
-                ]
-            ]);
+        return (int) ($record['branchId'] ?? 0) === $effectiveBranchId;
     }
 }

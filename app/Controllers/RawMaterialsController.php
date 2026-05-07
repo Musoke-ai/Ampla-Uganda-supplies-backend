@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
 use App\Models\RawMaterials;
+use App\Services\BranchContextService;
 
 class RawMaterialsController extends ResourceController
 {
@@ -15,8 +16,12 @@ class RawMaterialsController extends ResourceController
     **/
 
     private $rawMaterialModel;
+    private BranchContextService $branchContext;
+    private array $statusOptions = ['active', 'inactive', 'discontinued'];
+
     public function __construct(){
         $this->rawMaterialModel = new RawMaterials();
+        $this->branchContext = service('branchContext');
     }
 
     // fetch categories data
@@ -46,8 +51,9 @@ class RawMaterialsController extends ResourceController
      */
     public function index()
     {
-        //fetch stock
-        $rawMaterialsData =  $this->rawMaterialModel->findAll();
+        $rawMaterialsData = $this->branchContext
+            ->scopeBuilder($this->rawMaterialModel)
+            ->findAll();
         if(empty($rawMaterialsData)){
             return $this->noRawMaterialsData();
         }
@@ -68,19 +74,23 @@ class RawMaterialsController extends ResourceController
      */
     public function addRawMaterial()
     {
-        $data = [];
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
+        }
         if($this->request->getMethod() === 'post'){
-               $data = [
-               'name' => $this->request->getVar('name'),
-               'size' => $this->request->getVar('size'),
-               'Quantity' => $this->request->getVar('Quantity'),
-               'unitPrice' => $this->request->getVar('unitPrice'),
-               'supplier' => $this->request->getVar('supplier'),
-               'note' => $this->request->getVar('note'),
-               'expiry' => $this->request->getVar('expiry')
-               
-           ];
-        $insertQuery =  $rawMaterialData =  $this->rawMaterialModel->insert($data);
+        $data = $this->rawMaterialPayload($branchId);
+        $errors = $this->validateRawMaterialPayload($data);
+
+        if (!empty($errors)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'validationError',
+                'message' => $errors,
+            ], 422);
+        }
+
+        $insertQuery = $this->rawMaterialModel->insert($data);
         if(empty($insertQuery)){
             $response = [
                 'status' => false,
@@ -90,14 +100,17 @@ class RawMaterialsController extends ResourceController
             return $this->respond($response);
         }
         else{
+            $rawMaterialData = $this->rawMaterialModel->find($insertQuery);
             $response = [
                 'status' => true,
                 'error' => 'null',
-                'message' => 'Item(s) successfully added in the table.'
+                'message' => 'Item(s) successfully added in the table.',
+                'data' => $rawMaterialData,
             ];
 
              $payload = [
-                'rawMatrialId' => null,
+                'rawMatrialId' => $insertQuery,
+                'rawMaterialId' => $insertQuery,
                 'message' => 'Raw materials created' 
             ];
 
@@ -147,14 +160,18 @@ else{
     {
         // Fetch and trim ID
         $id = trim($this->request->getVar('materialId'));
+        $rawMaterial = $id ? $this->rawMaterialModel->find($id) : null;
         
         // Check if the ID is valid
-        if (!$id || !$this->rawMaterialModel->find($id)) {
+        if (!$id || !$rawMaterial) {
             return $this->respond([
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing raw material ID.'
             ]);
+        }
+        if (!$this->branchContext->recordMatchesCurrentBranch($rawMaterial)) {
+            return $this->respond(['status' => false, 'message' => 'This raw material is outside your current branch scope.'], 403);
         }
     
         // Validate input
@@ -166,19 +183,21 @@ else{
             ]);
         }
     
-        // Prepare data
-        $rawMaterialUpdateData = [
-            'name' => $this->request->getVar('name'),
-            'size' => $this->request->getVar('size'),
-            'Quantity' => $this->request->getVar('Quantity'),
-            'unitPrice' => $this->request->getVar('unitPrice'),
-            'supplier' => $this->request->getVar('supplier'),
-            'note' => $this->request->getVar('note'),
-            'expiry' => $this->request->getVar('expiry'),
-        ];
+        $rawMaterialUpdateData = $this->rawMaterialPayload(
+            $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId')) ?? ($rawMaterial['branchId'] ?? null)
+        );
+        $errors = $this->validateRawMaterialPayload($rawMaterialUpdateData);
+
+        if (!empty($errors)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'validationError',
+                'message' => $errors,
+            ], 422);
+        }
     
         // Ensure data is not empty before updating
-        if (empty(array_filter($rawMaterialUpdateData))) {
+        if (empty(array_filter($rawMaterialUpdateData, static fn ($value) => $value !== null && $value !== ''))) {
             return $this->respond([
                 'status' => false,
                 'error' => 'emptyData',
@@ -196,6 +215,7 @@ else{
         }
         $payload = [
                 'rawMatrialId' => $id,
+                'rawMaterialId' => $id,
                 'message' => 'Raw material(s) updated' 
             ];
 
@@ -206,7 +226,8 @@ else{
         return $this->respond([
             'status' => true,
             'error' => null,
-            'message' => 'Success!! Raw Material has been updated'
+            'message' => 'Success!! Raw Material has been updated',
+            'data' => $this->rawMaterialModel->find($id),
         ]);
     }
     
@@ -220,14 +241,18 @@ else{
 {
     // Fetch and trim ID
     $id = trim($this->request->getVar('materialId'));
+    $rawMaterial = $id ? $this->rawMaterialModel->find($id) : null;
 
     // Check if the ID is valid
-    if (!$id || !$this->rawMaterialModel->find($id)) {
+    if (!$id || !$rawMaterial) {
         return $this->respond([
             'status' => false,
             'error' => 'invalidId',
             'message' => 'Invalid or missing raw material ID.'
         ]);
+    }
+    if (!$this->branchContext->recordMatchesCurrentBranch($rawMaterial)) {
+        return $this->respond(['status' => false, 'message' => 'This raw material is outside your current branch scope.'], 403);
     }
 
     // Perform delete operation
@@ -240,6 +265,7 @@ else{
     }
       $payload = [
                 'rawMatrialId' => $id,
+                'rawMaterialId' => $id,
                 'message' => 'Raw material(s) deleted' 
             ];
 
@@ -262,5 +288,102 @@ else{
                     'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim|is_unique[categories.categoryName]'
                 ]
             ]);
+    }
+
+    private function rawMaterialPayload($branchId): array
+    {
+        return [
+            'branchId' => $branchId,
+            'name' => $this->cleanText($this->request->getVar('name')),
+            'materialCode' => $this->cleanText($this->request->getVar('materialCode'), true, true),
+            'category' => $this->cleanText($this->request->getVar('category'), true),
+            'size' => $this->cleanText($this->request->getVar('size')),
+            'unitOfMeasure' => $this->cleanText($this->request->getVar('unitOfMeasure')) ?: 'pcs',
+            'Quantity' => $this->cleanDecimal($this->request->getVar('Quantity')),
+            'unitPrice' => $this->cleanDecimal($this->request->getVar('unitPrice')),
+            'reorderLevel' => $this->cleanDecimal($this->request->getVar('reorderLevel')),
+            'supplier' => $this->cleanText($this->request->getVar('supplier')),
+            'supplierContact' => $this->cleanText($this->request->getVar('supplierContact'), true),
+            'storageLocation' => $this->cleanText($this->request->getVar('storageLocation'), true),
+            'status' => $this->cleanStatus($this->request->getVar('status')),
+            'note' => $this->cleanText($this->request->getVar('note')),
+            'expiry' => $this->cleanText($this->request->getVar('expiry'), true),
+        ];
+    }
+
+    private function validateRawMaterialPayload(array $data): array
+    {
+        $errors = [];
+
+        if ($data['branchId'] === null || $data['branchId'] === '') {
+            $errors['branchId'] = 'Select a branch for this raw material.';
+        }
+
+        if ($data['name'] === '') {
+            $errors['name'] = 'Raw material name is required.';
+        } elseif (mb_strlen($data['name']) < 2 || mb_strlen($data['name']) > 250) {
+            $errors['name'] = 'Raw material name must be between 2 and 250 characters.';
+        }
+
+        foreach ([
+            'materialCode' => 60,
+            'category' => 120,
+            'size' => 200,
+            'unitOfMeasure' => 40,
+            'supplier' => 250,
+            'supplierContact' => 120,
+            'storageLocation' => 150,
+            'note' => 250,
+        ] as $field => $maxLength) {
+            if (mb_strlen((string) ($data[$field] ?? '')) > $maxLength) {
+                $errors[$field] = ucfirst($field) . " must not exceed {$maxLength} characters.";
+            }
+        }
+
+        foreach (['Quantity', 'unitPrice', 'reorderLevel'] as $field) {
+            if (!is_numeric($data[$field]) || (float) $data[$field] < 0) {
+                $errors[$field] = "{$field} must be a positive number or zero.";
+            }
+        }
+
+        if (!in_array($data['status'], $this->statusOptions, true)) {
+            $errors['status'] = 'Status must be active, inactive, or discontinued.';
+        }
+
+        if (!empty($data['expiry'])) {
+            $expiry = strtotime((string) $data['expiry']);
+            if ($expiry === false) {
+                $errors['expiry'] = 'Expiry must be a valid date.';
+            }
+        }
+
+        return $errors;
+    }
+
+    private function cleanText($value, bool $nullable = false, bool $uppercase = false): ?string
+    {
+        $cleaned = trim(preg_replace('/\s+/', ' ', (string) ($value ?? '')));
+
+        if ($cleaned === '') {
+            return $nullable ? null : '';
+        }
+
+        return $uppercase ? strtoupper($cleaned) : $cleaned;
+    }
+
+    private function cleanDecimal($value): float
+    {
+        if ($value === null || $value === '') {
+            return 0.0;
+        }
+
+        return round((float) $value, 3);
+    }
+
+    private function cleanStatus($value): string
+    {
+        $status = strtolower((string) ($value ?: 'active'));
+
+        return in_array($status, $this->statusOptions, true) ? $status : 'active';
     }
 }

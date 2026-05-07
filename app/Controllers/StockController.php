@@ -72,6 +72,7 @@ class StockController extends ResourceController
         $oldStock = 3;
         if($this->request->getMethod() === 'post'){
                $data = [
+               'branchId' => $this->normalizeBranchId($this->request->getVar('branchId')),
                'stockItem' => $this->request->getVar('stockItem'),
                'stockItemQuantity' => $this->request->getVar('stockItemQuantity'),
                'oldStock' => $this->request->getVar('oldStock'),         
@@ -284,5 +285,11 @@ else{
                     'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim|is_unique[categories.categoryName]'
                 ]
             ]);
+    }
+
+    private function normalizeBranchId($branchId)
+    {
+        $branchId = trim((string) $branchId);
+        return $branchId === '' ? null : (int) $branchId;
     }
 }

@@ -52,6 +52,14 @@ class AuthGroups extends ShieldAuthGroups
             'title'       => 'Beta User',
             'description' => 'Has access to beta-level features.',
         ],
+        'categories' => [
+            'title'       => 'Categories',
+            'description' => 'Can be assigned category management responsibilities.',
+        ],
+        'batches' => [
+            'title'       => 'Production Batches',
+            'description' => 'Can work with production batch records.',
+        ],
     ];
 
     /**
@@ -70,6 +78,28 @@ class AuthGroups extends ShieldAuthGroups
         'users.edit'          => 'Can edit existing non-admin users',
         'users.delete'        => 'Can delete existing non-admin users',
         'beta.access'         => 'Can access beta-level features',
+        'reports.catalog.view' => 'Can view the report catalog',
+        'reports.dashboard.view' => 'Can view the reporting dashboard',
+        'reports.sales.view' => 'Can view sales reports',
+        'reports.inventory.view' => 'Can view inventory and stock reports',
+        'reports.production.view' => 'Can view production reports',
+        'reports.expenses.view' => 'Can view expense reports',
+        'reports.customers.view' => 'Can view customer reports',
+        'reports.suppliers.view' => 'Can view supplier reports',
+        'reports.staff.view' => 'Can view staff reports',
+        'reports.finance.view' => 'Can view financial reports',
+        'reports.audit.view' => 'Can view audit and risk reports',
+        'reports.forecasting.view' => 'Can view forecasting reports',
+        'reports.alerts.view' => 'Can view report alerts and insights',
+        'reports.export' => 'Can export reports',
+        'reports.print' => 'Can print reports',
+        'reports.custom.create' => 'Can create custom reports',
+        'reports.custom.edit' => 'Can edit custom reports',
+        'reports.custom.delete' => 'Can delete custom reports',
+        'reports.custom.share' => 'Can share custom reports',
+        'reports.custom.run' => 'Can run custom reports',
+        'categories.manage' => 'Can manage product and production categories',
+        'production.batches.manage' => 'Can manage production batches',
     ];
 
     /**
@@ -85,6 +115,9 @@ class AuthGroups extends ShieldAuthGroups
             'admin.*',
             'users.*',
             'beta.*',
+            'reports.*',
+            'categories.*',
+            'production.*',
         ],
         'admin' => [
             'admin.access',
@@ -92,6 +125,9 @@ class AuthGroups extends ShieldAuthGroups
             'users.edit',
             'users.delete',
             'beta.access',
+            'reports.*',
+            'categories.*',
+            'production.*',
         ],
         'developer' => [
             'admin.access',
@@ -103,6 +139,12 @@ class AuthGroups extends ShieldAuthGroups
         'user' => [],
         'beta' => [
             'beta.access',
+        ],
+        'categories' => [
+            'categories.manage',
+        ],
+        'batches' => [
+            'production.batches.manage',
         ],
     ];
 }

@@ -13,7 +13,7 @@ class Indebt extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['indebtItemId', 'indebtOwner', 'quantityDebted', 'atPrice', 'initialDeposit','totalAmount','endDate','custId', 'SR_ID'];
+    protected $allowedFields    = ['branchId', 'indebtItemId', 'indebtOwner', 'quantityDebted', 'atPrice', 'initialDeposit','totalAmount','endDate','custId', 'SR_ID'];
 
     // Dates
     protected $useTimestamps = false;

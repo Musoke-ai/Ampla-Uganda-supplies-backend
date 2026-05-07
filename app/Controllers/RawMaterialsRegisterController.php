@@ -7,6 +7,11 @@ use App\Models\RawMaterialsRegister;
 use App\Models\RawMaterials;
 use App\Models\ProductRegister;
 use App\Models\EmployeeRegister;
+use App\Services\BranchContextService;
+use App\Services\StockLedgerService;
+use App\Services\AuditLogService;
+use RuntimeException;
+use Throwable;
 
 class RawMaterialsRegisterController extends ResourceController
  {
@@ -19,10 +24,16 @@ class RawMaterialsRegisterController extends ResourceController
 
     private $rawMaterialsModel;
     private $rawMaterialsRegister;
+    private BranchContextService $branchContext;
+    private StockLedgerService $stockLedger;
+    private AuditLogService $auditLog;
 
     public function __construct() {
         $this->rawMaterialsModel = new RawMaterials();
         $this->rawMaterialsRegister = new RawMaterialsRegister();
+        $this->branchContext = service('branchContext');
+        $this->stockLedger = new StockLedgerService();
+        $this->auditLog = new AuditLogService();
     }
 
     // fetch categories data
@@ -57,8 +68,9 @@ class RawMaterialsRegisterController extends ResourceController
 
     public function index()
  {
-        //fetch stock
-        $dailyList =  $this->rawMaterialsRegister->findAll();
+        $dailyList =  $this->branchContext
+            ->scopeBuilder($this->rawMaterialsRegister)
+            ->findAll();
         if ( empty( $dailyList ) ) {
             return $this->noData();
         } else {
@@ -78,11 +90,10 @@ class RawMaterialsRegisterController extends ResourceController
     */
     public function createList()
     {
-        // Decode raw JSON from request body
+        $userId = (int) auth()->id();
         $json = $this->request->getBody();
-        $inputData = json_decode($json, true); // Decode into an associative array
+        $inputData = json_decode($json, true);
     
-        // Validate input
         if (empty($inputData)) {
             return $this->respond([
                 'status' => false,
@@ -91,95 +102,121 @@ class RawMaterialsRegisterController extends ResourceController
             ], 400);
         }
 
-        // Standardize input to be an array of materials, so we can handle a single object or an array of objects
         $materials = isset($inputData[0]) && is_array($inputData[0]) ? $inputData : [$inputData];
-    
-        $insertData = [];
-        $updateMap = [];
-    
-        foreach ($materials as $material) {
-            $materialId = $material['materialId'] ?? null;
-            $quantity = $material['quantity'] ?? 0;
-            $initials = $material['initials'] ?? null;
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
 
-            // Validation: required fields
-            if (empty($materialId) || !is_numeric($quantity) || (float)$quantity <= 0) {
-                return $this->respond([
-                    'status' => false,
-                    'error' => 'MissingOrInvalidFields',
-                    'message' => 'Each material must have a valid materialId and a numeric quantity greater than 0.'
-                ], 400);
-            }
-    
-            // Get current raw material from the main stock
-            $rawMaterial = $this->rawMaterialsModel->find($materialId);
-            if (!$rawMaterial) {
-                 return $this->respond([
-                    'status' => false,
-                    'error' => 'NotFound',
-                    'message' => "Material with ID {$materialId} not found in stock."
-                ], 404);
-            }
-
-            // Check for sufficient stock
-            if ((float)$quantity > (float)$rawMaterial['Quantity']) {
-                return $this->respond([
-                    'status' => false,
-                    'error' => 'InsufficientStock',
-                    'message' => "Insufficient stock for: ".$rawMaterial['name'].". Requested: {$quantity}, Available: ".$rawMaterial['Quantity']
-                ], 409); // 409 Conflict
-            }
-
-            // Calculate total cost based on unit price from stock
-            $totalCost = (float)$rawMaterial['unitPrice'] * (float)$quantity;
-    
-            // Prepare data for batch insertion into the daily register
-            $insertData[] = [
-                'materialId' => $materialId,
-                'quantity' => $quantity,
-                'totalCost' => $totalCost,
-                'initials' => $initials
-            ];
-    
-            // Prepare data for updating the main stock quantity
-            $updateMap[$materialId] = [
-                'Quantity' => (float)$rawMaterial['Quantity'] - (float)$quantity,
-            ];
+        if ($branchId === null) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'MissingBranch',
+                'message' => 'Select a current branch first.'
+            ], 422);
         }
-    
-        // Insert all records to the daily register table
-        if (!empty($insertData)) {
-            $inserted = (count($insertData) > 1)
-                ? $this->rawMaterialsRegister->insertBatch($insertData)
-                : $this->rawMaterialsRegister->insert($insertData[0]);
-        
-            if (!$inserted) {
-                return $this->respond([
-                    'status' => false,
-                    'error' => 'InsertError',
-                    'message' => 'Failed to add materials to the daily register.'
-                ], 500);
+
+        $db = db_connect();
+        $createdIds = [];
+
+        try {
+            $db->transBegin();
+
+            foreach ($materials as $material) {
+                $materialId = (int) ($material['materialId'] ?? 0);
+                $quantity = (float) ($material['quantity'] ?? 0);
+                $initials = $material['initials'] ?? null;
+
+                if ($materialId <= 0 || $quantity <= 0) {
+                    throw new RuntimeException('Each material must have a valid materialId and a numeric quantity greater than 0.');
+                }
+
+                $rawMaterial = $this->rawMaterialsModel->find($materialId);
+                if (!$rawMaterial) {
+                    throw new RuntimeException("Material with ID {$materialId} not found in stock.");
+                }
+                if ((int) ($rawMaterial['branchId'] ?? 0) !== $branchId) {
+                    throw new RuntimeException("Material with ID {$materialId} does not belong to your current branch.");
+                }
+
+                $totalCost = round((float) $rawMaterial['unitPrice'] * $quantity, 2);
+                $registerId = $this->rawMaterialsRegister->insert([
+                    'branchId' => $branchId,
+                    'materialId' => $materialId,
+                    'quantity' => $quantity,
+                    'totalCost' => $totalCost,
+                    'initials' => $initials,
+                ], true);
+
+                if (!$registerId) {
+                    throw new RuntimeException('Failed to add materials to the daily register.');
+                }
+
+                $updated = $db->table('raw_materials')
+                    ->where('branchId', $branchId)
+                    ->where('materialId', $materialId)
+                    ->where('Quantity >=', $quantity)
+                    ->set('Quantity', 'Quantity - ' . $quantity, false)
+                    ->update();
+
+                if (!$updated || $db->affectedRows() !== 1) {
+                    throw new RuntimeException("Insufficient stock for: {$rawMaterial['name']}. Requested: {$quantity}, Available: {$rawMaterial['Quantity']}");
+                }
+
+                $updatedMaterial = $this->rawMaterialsModel->find($materialId);
+                $this->stockLedger->recordRawMaterialMovement(
+                    $branchId,
+                    $materialId,
+                    'production_out',
+                    0,
+                    $quantity,
+                    (float) $updatedMaterial['Quantity'],
+                    (float) $rawMaterial['unitPrice'],
+                    'daily_rawmaterials_register',
+                    $registerId,
+                    'RMR-' . $registerId,
+                    $userId
+                );
+
+                $this->auditLog->record(
+                    'raw_material.consumed',
+                    'daily_rawmaterials_register',
+                    $registerId,
+                    $rawMaterial,
+                    $updatedMaterial,
+                    $userId,
+                    $branchId,
+                    ['quantity_out' => $quantity, 'total_cost' => $totalCost]
+                );
+
+                $createdIds[] = $registerId;
             }
-        }
-    
-        // Update stock quantities in the main raw materials table
-        foreach ($updateMap as $materialId => $updateData) {
-            $this->rawMaterialsModel->update($materialId, $updateData);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Raw material register transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Raw material register creation failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'error' => 'RawMaterialRegisterFailed',
+                'message' => $e->getMessage()
+            ], 409);
         }
 
         $payload = [
-            'rawMatrialId' => null, // This could be improved to return IDs of created records
-                'message' => 'Raw material List created' 
-            ];
+            'rawMatrialId' => $createdIds,
+            'message' => 'Raw material List created'
+        ];
 
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('rawmaterialsregister-channel', 'rawmaterialsregister-created', $payload);
+        $pusher = get_pusher();
+        $pusher->trigger('rawmaterialsregister-channel', 'rawmaterialsregister-created', $payload);
     
-        // Success response
         return $this->respond([
             'status' => true,
             'error' => null,
+            'ids' => $createdIds,
             'message' => 'Raw materials successfully added to the daily list.'
         ]);
     }
@@ -201,97 +238,150 @@ class RawMaterialsRegisterController extends ResourceController
     * @return mixed
     */
 
-    public function update( $id = null )
- {
-     // Validate input
-    //  if ( !( $this->request->getMethod() === 'post') ) {
-    //     return $this->respond( [
-    //         'status' => false,
-    //         'error' => 'validationFailed',
-    //         'message' => 'Validation failed. Please check your input and try again.'
-    //     ] );
-    // }
-        // Fetch and trim ID
-        $id = trim( $this->request->getVar('id') );
-           // Check if the ID is valid
-        $dailyRawMaterial = $this->rawMaterialsRegister->find( $id );
-           if ( !$id || !$dailyRawMaterial ) {
-            return $this->respond( [
+    public function update($id = null)
+    {
+        $userId = (int) auth()->id();
+        $id = trim($this->request->getVar('id'));
+        $dailyRawMaterial = $this->rawMaterialsRegister->find($id);
+
+        if (!$id || !$dailyRawMaterial) {
+            return $this->respond([
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing raw material list ID.'
-            ] );
-        }
-        $rawMaterial = $this->rawMaterialsModel->find( $this->request->getVar( 'materialId' ) );
-        $requestedQty = $this->request->getVar('quantity');
-        $oldQty = $dailyRawMaterial['quantity'];
-        $stockQty = $rawMaterial['Quantity'];
-        
-        $diff = $requestedQty - $oldQty; // positive if more is needed, negative if less is used
-        
-        $newQty = $requestedQty;
-        $newItemQty = $stockQty - $diff; // since more usage reduces stock, less usage increases stock
-        
-        // If more quantity is being used than before, ensure store has enough stock
-        if ($diff > 0 && $diff > $stockQty) {
-            return $this->respond([
-                'status' => false,
-                'error' => 'lowStock',
-                'message' => 'Not enough stock in the store.'
             ]);
         }
-
-        // Prepare data
-        $dailyListUpdateData = [
-            'materialId' => $this->request->getVar( 'materialId' ),
-            'quantity' => $newQty,
-            'totalCost' => $rawMaterial['unitPrice'] * $newQty,
-            'initials' => $this->request->getVar( 'initials' ),
-        ];
-
-        // Ensure data is not empty before updating
-        if ( empty( array_filter( $dailyListUpdateData ) ) ) {
-            return $this->respond( [
-                'status' => false,
-                'error' => 'emptyData',
-                'message' => 'There is no data to update. Please provide at least one field to modify.'
-            ] );
+        if (!$this->branchContext->recordMatchesCurrentBranch($dailyRawMaterial)) {
+            return $this->respond(['status' => false, 'message' => 'This list item is outside your current branch scope.'], 403);
         }
-     
-            // Correct update method call with ID
-            if ( !$this->rawMaterialsRegister->update( $id, $dailyListUpdateData ) ) {
-                return $this->respond( [
-                    'status' => false,
-                    'error' => 'dailyListUpdateFail',
-                    'message' => 'Fail! Daily List update failed. Please try again later.'
-                ] );
+
+        $branchId = (int) ($dailyRawMaterial['branchId'] ?? 0);
+        $oldMaterialId = (int) $dailyRawMaterial['materialId'];
+        $newMaterialId = (int) ($this->request->getVar('materialId') ?: $oldMaterialId);
+        $requestedQty = (float) $this->request->getVar('quantity');
+        $oldQty = (float) $dailyRawMaterial['quantity'];
+        $oldRawMaterial = $this->rawMaterialsModel->find($oldMaterialId);
+        $newRawMaterial = $this->rawMaterialsModel->find($newMaterialId);
+
+        if ($requestedQty <= 0) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'InvalidQuantity',
+                'message' => 'Quantity must be greater than zero.'
+            ], 400);
+        }
+        if (!$oldRawMaterial || !$this->branchContext->recordMatchesCurrentBranch($oldRawMaterial)) {
+            return $this->respond(['status' => false, 'message' => 'The original raw material is outside your current branch scope.'], 403);
+        }
+        if (!$newRawMaterial || !$this->branchContext->recordMatchesCurrentBranch($newRawMaterial)) {
+            return $this->respond(['status' => false, 'message' => 'This raw material is outside your current branch scope.'], 403);
+        }
+
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            if (!$this->rawMaterialsRegister->update($id, [
+                'branchId' => $branchId,
+                'materialId' => $newMaterialId,
+                'quantity' => $requestedQty,
+                'totalCost' => round((float) $newRawMaterial['unitPrice'] * $requestedQty, 2),
+                'initials' => $this->request->getVar('initials'),
+            ])) {
+                throw new RuntimeException('Daily list update failed.');
             }
 
-             //update the raw material quantity
-             $rawMaterialUpdateData = [
-                'name' => $rawMaterial[ 'name' ],
-                'size' => $rawMaterial[ 'size' ],
-                'Quantity' => $newItemQty,
-                'unitPrice' => $rawMaterial[ 'unitPrice' ],
-                'supplier' => $rawMaterial[ 'supplier' ],
-                'note' => $rawMaterial[ 'note' ],
-            ];
-            $updateQty = $this->rawMaterialsModel->update( $rawMaterial[ 'materialId' ], $rawMaterialUpdateData );
-    $payload = [
-                'rawMatrialId' => $rawMaterial,
-                'message' => 'Raw material List updated' 
-            ];
+            if ($oldMaterialId !== $newMaterialId) {
+                $restored = $db->table('raw_materials')
+                    ->where('branchId', $branchId)
+                    ->where('materialId', $oldMaterialId)
+                    ->set('Quantity', 'Quantity + ' . $oldQty, false)
+                    ->update();
 
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('rawmaterialsregister-channel', 'rawmaterialsregister-updated', $payload);
-            // Success response
-            return $this->respond( [
-                'status' => true,
-                'error' => null,
-                'message' => 'Success!! Daily list has been updated'
-            ] );
+                if (!$restored || $db->affectedRows() !== 1) {
+                    throw new RuntimeException('Could not restore the original raw material stock.');
+                }
+
+                $deducted = $db->table('raw_materials')
+                    ->where('branchId', $branchId)
+                    ->where('materialId', $newMaterialId)
+                    ->where('Quantity >=', $requestedQty)
+                    ->set('Quantity', 'Quantity - ' . $requestedQty, false)
+                    ->update();
+
+                if (!$deducted || $db->affectedRows() !== 1) {
+                    throw new RuntimeException('Not enough stock in the store.');
+                }
+
+                $restoredMaterial = $this->rawMaterialsModel->find($oldMaterialId);
+                $updatedMaterial = $this->rawMaterialsModel->find($newMaterialId);
+                $this->stockLedger->recordRawMaterialMovement($branchId, $oldMaterialId, 'production_out_reversal', $oldQty, 0, (float) $restoredMaterial['Quantity'], (float) $oldRawMaterial['unitPrice'], 'daily_rawmaterials_register', $id, 'RMR-' . $id, $userId);
+                $this->stockLedger->recordRawMaterialMovement($branchId, $newMaterialId, 'production_out', 0, $requestedQty, (float) $updatedMaterial['Quantity'], (float) $newRawMaterial['unitPrice'], 'daily_rawmaterials_register', $id, 'RMR-' . $id, $userId);
+            } else {
+                $diff = $requestedQty - $oldQty;
+                if ($diff > 0) {
+                    $updated = $db->table('raw_materials')
+                        ->where('branchId', $branchId)
+                        ->where('materialId', $newMaterialId)
+                        ->where('Quantity >=', $diff)
+                        ->set('Quantity', 'Quantity - ' . $diff, false)
+                        ->update();
+
+                    if (!$updated || $db->affectedRows() !== 1) {
+                        throw new RuntimeException('Not enough stock in the store.');
+                    }
+
+                    $updatedMaterial = $this->rawMaterialsModel->find($newMaterialId);
+                    $this->stockLedger->recordRawMaterialMovement($branchId, $newMaterialId, 'production_out_adjustment', 0, $diff, (float) $updatedMaterial['Quantity'], (float) $newRawMaterial['unitPrice'], 'daily_rawmaterials_register', $id, 'RMR-' . $id, $userId);
+                } elseif ($diff < 0) {
+                    $returnedQty = abs($diff);
+                    $updated = $db->table('raw_materials')
+                        ->where('branchId', $branchId)
+                        ->where('materialId', $newMaterialId)
+                        ->set('Quantity', 'Quantity + ' . $returnedQty, false)
+                        ->update();
+
+                    if (!$updated || $db->affectedRows() !== 1) {
+                        throw new RuntimeException('Could not restore raw material stock.');
+                    }
+
+                    $updatedMaterial = $this->rawMaterialsModel->find($newMaterialId);
+                    $this->stockLedger->recordRawMaterialMovement($branchId, $newMaterialId, 'production_out_reversal', $returnedQty, 0, (float) $updatedMaterial['Quantity'], (float) $newRawMaterial['unitPrice'], 'daily_rawmaterials_register', $id, 'RMR-' . $id, $userId);
+                }
+            }
+
+            $updatedRegister = $this->rawMaterialsRegister->find($id);
+            $this->auditLog->record('raw_material_register.updated', 'daily_rawmaterials_register', $id, $dailyRawMaterial, $updatedRegister, $userId, $branchId);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Daily list update transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Raw material register update failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'error' => 'DailyListUpdateFailed',
+                'message' => $e->getMessage()
+            ], 409);
         }
+
+        $pusher = get_pusher();
+        $pusher->trigger('rawmaterialsregister-channel', 'rawmaterialsregister-updated', [
+            'rawMatrialId' => $newMaterialId,
+            'message' => 'Raw material List updated'
+        ]);
+
+        return $this->respond([
+            'status' => true,
+            'error' => null,
+            'message' => 'Success!! Daily list has been updated'
+        ]);
+    }
 
     /**
     * Delete the designated resource object from the model
@@ -299,55 +389,90 @@ class RawMaterialsRegisterController extends ResourceController
     * @return mixed
     */
 
-    public function delete( $id = null )
- {
-        // Fetch and trim ID
-        $id = trim( $this->request->getVar( 'id' ) );
+    public function delete($id = null)
+    {
+        $userId = (int) auth()->id();
+        $id = trim($this->request->getVar('id'));
+        $dailyRawMaterial = $this->rawMaterialsRegister->find($id);
 
-        $rawMaterial = $this->rawMaterialsModel->find( $this->request->getVar( 'materialId' ) );
-        $dailyRawMaterialQty = $this->rawMaterialsRegister->find( $id )['quantity'];
-
-        // Check if the ID is valid
-        if ( !$id || !$this->rawMaterialsRegister->find( $id ) ) {
-            return $this->respond( [
+        if (!$id || !$dailyRawMaterial) {
+            return $this->respond([
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing daily list ID.'
-            ] );
+            ]);
         }
 
-        // Perform delete operation
-        if ( !$this->rawMaterialsRegister->delete( $id ) ) {
-            return $this->respond( [
+        $rawMaterial = $this->rawMaterialsModel->find($dailyRawMaterial['materialId']);
+        if (!$this->branchContext->recordMatchesCurrentBranch($dailyRawMaterial) || !$this->branchContext->recordMatchesCurrentBranch($rawMaterial)) {
+            return $this->respond(['status' => false, 'message' => 'This list item is outside your current branch scope.'], 403);
+        }
+
+        $branchId = (int) $dailyRawMaterial['branchId'];
+        $dailyRawMaterialQty = (float) ($dailyRawMaterial['quantity'] ?? 0);
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            if (!$this->rawMaterialsRegister->delete($id)) {
+                throw new RuntimeException('Daily list has not been deleted.');
+            }
+
+            $updated = $db->table('raw_materials')
+                ->where('branchId', $branchId)
+                ->where('materialId', $rawMaterial['materialId'])
+                ->set('Quantity', 'Quantity + ' . $dailyRawMaterialQty, false)
+                ->update();
+
+            if (!$updated || $db->affectedRows() !== 1) {
+                throw new RuntimeException('Could not restore raw material stock.');
+            }
+
+            $updatedMaterial = $this->rawMaterialsModel->find($rawMaterial['materialId']);
+            $this->stockLedger->recordRawMaterialMovement(
+                $branchId,
+                (int) $rawMaterial['materialId'],
+                'production_out_reversal',
+                $dailyRawMaterialQty,
+                0,
+                (float) $updatedMaterial['Quantity'],
+                (float) $rawMaterial['unitPrice'],
+                'daily_rawmaterials_register',
+                $id,
+                'RMR-' . $id,
+                $userId
+            );
+
+            $this->auditLog->record('raw_material_register.deleted', 'daily_rawmaterials_register', $id, $dailyRawMaterial, null, $userId, $branchId);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Daily list delete transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Raw material register delete failed: ' . $e->getMessage());
+
+            return $this->respond([
                 'status' => false,
-                'error' => 'deleteFail',
-                'message' => 'Fail! Daily list has not been deleted. Please try again later.'
-            ] );
+                'error' => 'DailyListDeleteFailed',
+                'message' => $e->getMessage()
+            ], 409);
         }
-         //update the raw material quantity
-         $rawMaterialUpdateData = [
-            'name' => $rawMaterial[ 'name' ],
-            'size' => $rawMaterial[ 'size' ],
-            'Quantity' => $rawMaterial[ 'Quantity' ] + $dailyRawMaterialQty,
-            'unitPrice' => $rawMaterial[ 'unitPrice' ],
-            'supplier' => $rawMaterial[ 'supplier' ],
-            'note' => $rawMaterial[ 'note' ],
-        ];
-        $updateQty = $this->rawMaterialsModel->update( $rawMaterial[ 'materialId' ], $rawMaterialUpdateData );
- $payload = [
-                'rawMatrialId' => $rawMaterial,
-                'message' => 'Raw material List deleted' 
-            ];
 
-            // Trigger the event via Pusher
-            $pusher = get_pusher();
-            $pusher->trigger('rawmaterialsregister-channel', 'rawmaterialsregister-deleted', $payload);
-        // Success response
-        return $this->respond( [
+        $pusher = get_pusher();
+        $pusher->trigger('rawmaterialsregister-channel', 'rawmaterialsregister-deleted', [
+            'rawMatrialId' => $rawMaterial,
+            'message' => 'Raw material List deleted'
+        ]);
+
+        return $this->respond([
             'status' => true,
             'error' => null,
             'message' => 'Success!! Selected raw material has been removed from the list.'
-        ] );
+        ]);
     }
 
     // validate daily list form entries

@@ -103,7 +103,6 @@ class Autoload extends AutoloadConfig
         'refresh_token_helper',
         'get_bearerToken',
         'handle_cookie',
-       'handle_payment',
        'pusher_helper',
     ];
 }

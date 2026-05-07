@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
 use App\Models\CustomerModel;
+use App\Services\BranchContextService;
 
 class Customers extends ResourceController
 {
@@ -15,8 +16,10 @@ class Customers extends ResourceController
     **/
 
     private $customerModel;
+    private BranchContextService $branchContext;
     public function __construct(){
         $this->customerModel = new CustomerModel();
+        $this->branchContext = service('branchContext');
         helper('pusher'); // Load our custom helper
     }
 
@@ -47,8 +50,9 @@ class Customers extends ResourceController
      */
     public function index()
     {
-        //fetch categories
-        $data = $this->customerModel->findAll();
+        $data = $this->branchContext
+            ->scopeBuilder($this->customerModel)
+            ->findAll();
         if(empty($data)){
             return [];
         }
@@ -65,6 +69,10 @@ class Customers extends ResourceController
     public function create()
     {
          $userId = auth()->id();
+         $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branch_id'));
+         if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'A branch must be selected first.'], 422);
+         }
        // && $this->validateCustomerEntries()
         if(!($this->request->getMethod() === 'post')){
             return $this->validationFail();
@@ -73,6 +81,7 @@ class Customers extends ResourceController
         else{
             $customerData = [
                 'custOwner' =>   $userId,
+                'branchId' => $branchId,
                 'custName' => $this->request->getVar('cust_name'),
                 'custContact' => $this->request->getVar('cust_contact'),
                 'custEmail' => $this->request->getVar('cust_email'),
@@ -122,8 +131,13 @@ class Customers extends ResourceController
     public function update($id = null)
     {
         $userId = auth()->id();
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branch_id'));
         //update fetched category
         $id = trim($this->request->getVar('cust_id'));
+        $customer = $this->customerModel->find($id);
+        if (!$this->branchContext->recordMatchesCurrentBranch($customer)) {
+            return $this->respond(['status' => false, 'message' => 'This customer is outside your current branch scope.'], 403);
+        }
         // $data = $this->categoryModel->find($id);&& $this->validateCustomerEntries()
 
         if(!($this->request->getMethod() === 'post' )){
@@ -133,6 +147,7 @@ class Customers extends ResourceController
         else{
             $customerUpdateData = [
                 'custOwner' => $userId,
+                'branchId' => $branchId ?? ($customer['branchId'] ?? null),
                 'custName' => $this->request->getVar('cust_name'),
                 'custContact' => $this->request->getVar('cust_contact'),
                 'custEmail' => $this->request->getVar('cust_email'),
@@ -185,6 +200,9 @@ class Customers extends ResourceController
         if(empty($data)){
             return $this->nocustomerdata();
         }
+        if (!$this->branchContext->recordMatchesCurrentBranch($data)) {
+            return $this->respond(['status' => false, 'message' => 'This customer is outside your current branch scope.'], 403);
+        }
         // in case a category is found
         else{
             $del_customer = $this->customerModel->delete($id);
@@ -226,5 +244,11 @@ class Customers extends ResourceController
                     'rules' => 'required|max_length[100]|min_length[3]|trim'
                 ]
             ]);
+    }
+
+    private function normalizeBranchId($branchId)
+    {
+        $branchId = trim((string) $branchId);
+        return $branchId === '' ? null : (int) $branchId;
     }
 }

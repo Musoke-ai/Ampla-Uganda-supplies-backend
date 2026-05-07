@@ -13,7 +13,7 @@ class Statistics extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['statItemId','busId', 'statItemStock', 'statItemStockWorth', 'statItemSales', 'statItemSalesWorth', 'statItemIndebt', 'statItemIndebtWorth', 'statItemIndebtToday', 'statItemIndebtTodayWorth', 'statItem'];
+    protected $allowedFields    = ['branchId', 'statItemId','busId', 'statItemStock', 'statItemStockWorth', 'statItemSales', 'statItemSalesWorth', 'statItemIndebt', 'statItemIndebtWorth', 'statItemIndebtToday', 'statItemIndebtTodayWorth', 'statItem'];
 
     // Dates
     protected $useTimestamps = false;

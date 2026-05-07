@@ -12,6 +12,7 @@ use App\Models\Sales;
 use CodeIgniter\Shield\Models\UserModel;
 use CodeIgniter\Shield\Entities\User;
 use App\Models\Stock;
+use App\Services\BranchContextService;
 
 class Retrievals extends ResourceController
 {
@@ -27,6 +28,7 @@ class Retrievals extends ResourceController
     private $indebtModel;
     private $salesModel;
     private $stockModel;
+    private BranchContextService $branchContext;
 
     public function __construct(){
         $this->inventoryModel = new Inventory();
@@ -35,6 +37,7 @@ class Retrievals extends ResourceController
         $this->indebtModel = new Indebt();
         $this->salesModel = new Sales();
         $this->stockModel = new Stock();
+        $this->branchContext = service('branchContext');
     }
 
      // return a response for a lack of data error 
@@ -72,7 +75,7 @@ class Retrievals extends ResourceController
         $userId = auth()->id();
         // home page => fetch stock item details
         // $data = $this->inventoryModel->where('itemOwner', $userId)->findAll();
-        $data = $this->inventoryModel->findAll();
+        $data = $this->branchContext->scopeBuilder($this->inventoryModel)->findAll();
 
         if(empty($data)){
             $data = [];
@@ -93,7 +96,9 @@ class Retrievals extends ResourceController
     public function getItem($id = null)
     {
         //single item details
-        $data = $this->inventoryModel->where('itemId', $id)->first();
+        $data = $this->branchContext
+            ->scopeBuilder($this->inventoryModel->where('itemId', $id))
+            ->first();
 
         if(empty($data)){
             return $this->nostockdata();
@@ -110,7 +115,7 @@ class Retrievals extends ResourceController
         $userId = auth()->id();
         //fetch stock
         // $stockData =  $this->stockModel->where('stockOwner',$userId)->findAll();
-        $stockData =  $this->stockModel->findAll();
+        $stockData =  $this->branchContext->scopeBuilder($this->stockModel)->findAll();
         if(empty($stockData)){
             return $this->respond([]);
         }
@@ -135,7 +140,7 @@ class Retrievals extends ResourceController
         $userId = auth()->id();
         // get stats
         // $data = $this->statisticsModel->where('busId', $userId)->findAll();
-        $data = $this->statisticsModel->findAll();
+        $data = $this->branchContext->scopeBuilder($this->statisticsModel)->findAll();
 
         if(empty($data)){
             return $this->nostockdata();
@@ -157,7 +162,9 @@ class Retrievals extends ResourceController
         $userId = auth()->id();
         //stock history
         // $data = $this->historyModel->where('busId', $userId)->orderBy('historyDateCreated', 'desc')->findAll();
-        $data = $this->historyModel->orderBy('historyDateCreated', 'desc')->findAll();
+        $data = $this->branchContext
+            ->scopeBuilder($this->historyModel->orderBy('historyDateCreated', 'desc'))
+            ->findAll();
 
         if(empty($data)){
             return $this->nostockdata();
@@ -207,7 +214,7 @@ class Retrievals extends ResourceController
 public function getDebts(){
     $userId = auth()->id();
     // $debts = $this->indebtModel->where('indebtOwner', $userId)->findAll();
-    $debts = $this->indebtModel->findAll();
+    $debts = $this->branchContext->scopeBuilder($this->indebtModel)->findAll();
     if($debts){
         return $this->respond($debts);
         exit();
@@ -226,7 +233,12 @@ public function getDebts(){
 public function getSales(){
     $userId = auth()->id();
     // $sales = $this->salesModel->where('saleOwner', $userId)->findAll();
-    $sales = $this->salesModel->findAll();
+    $builder = $this->salesModel
+        ->groupStart()
+            ->where('saleStatus <>', 'cancelled')
+            ->orWhere('saleStatus IS NULL', null, false)
+        ->groupEnd();
+    $sales = $this->branchContext->scopeBuilder($builder)->findAll();
     if($sales){
         return $this->respond($sales);
         exit();

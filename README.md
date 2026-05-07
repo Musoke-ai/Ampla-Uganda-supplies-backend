@@ -28,6 +28,53 @@ to your `app` folder. The affected files can be copied or merged from
 Copy `env` to `.env` and tailor for your app, specifically the baseURL
 and any database settings.
 
+## Clean Test DB Workflow
+
+To verify that the backend can build its schema from migrations without touching your current database, use the helper script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\prepare-clean-test-db.ps1
+```
+
+This script will:
+
+- temporarily point `.env` to a fresh database name
+- create that database with `php spark db:create`
+- run `php spark migrate --all`
+- show `php spark migrate:status`
+- restore your original `.env` database setting when it finishes
+
+You can also provide your own database name:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\prepare-clean-test-db.ps1 -DatabaseName amplaerp_migration_test_manual
+```
+
+Useful options:
+
+- `-CreateOnly` creates the database but skips migrations
+- `-KeepEnv` leaves `.env` pointing at the test database after the script finishes
+
+This workflow is intended for local validation on a fresh database. Do not use it against production.
+
+## Existing DB Baseline
+
+If your local database was imported from SQL and already has the tables before these migrations were added, baseline the migration history instead of running `php spark migrate` directly:
+
+```powershell
+php .\scripts\baseline-current-db-migrations.php --dry-run
+php .\scripts\baseline-current-db-migrations.php
+php spark migrate:status
+```
+
+What this does:
+
+- checks that the expected app tables already exist
+- creates a backup snapshot of the current `migrations` table in `writable/migration-baseline-backups`
+- inserts the missing migration history rows without recreating tables or touching their data
+
+Use this only for an already-populated imported database. Avoid `migrate:rollback` on that database unless you intentionally want to remove baseline tables.
+
 ## Important Change with index.php
 
 `index.php` is no longer in the root of the project! It has been moved inside the *public* folder,

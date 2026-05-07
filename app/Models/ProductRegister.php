@@ -13,7 +13,7 @@ class ProductRegister extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['prodId', 'quantity', 'initials', 'dailyProductionDateCreated', 'dailyProductionDateUpdated',"dailyProductionDateDeleted"];
+    protected $allowedFields    = ['branchId', 'batchId', 'orderId', 'prodId', 'quantity', 'Quantity', 'initials', 'dailyProductionDateCreated', 'dailyProductionDateUpdated',"dailyProductionDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;

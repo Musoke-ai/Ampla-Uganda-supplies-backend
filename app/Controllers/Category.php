@@ -96,8 +96,12 @@ class Category extends ResourceController
      */
     public function create()
     {
+        if ($adminResponse = $this->ensureAdminAccess()) {
+            return $adminResponse;
+        }
+
         //add new category
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())){
+        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries('create'))){
             return $this->validationFail();
         }
         // in case form validation is passed
@@ -157,11 +161,19 @@ class Category extends ResourceController
      */
     public function update($id = null)
     {
+        if ($adminResponse = $this->ensureAdminAccess()) {
+            return $adminResponse;
+        }
+
         //update fetched category
         $id = trim($this->request->getVar('category_id'));
         $data = $this->categoryModel->find($id);
 
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())){
+        if (empty($data)) {
+            return $this->nocategoriesdata();
+        }
+
+        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries('update'))){
             return $this->validationFail();
         }
         // in case form validation fails
@@ -170,7 +182,7 @@ class Category extends ResourceController
                 'categoryName' => $this->request->getVar('category_name')
             ];
 
-            $updateCategoryData = $this->categoryModel->update($categoryUpdateData);
+            $updateCategoryData = $this->categoryModel->update($id, $categoryUpdateData);
 
             if(!$updateCategoryData){
                 $reponse = [
@@ -201,6 +213,11 @@ class Category extends ResourceController
      */
     public function delete($id = null)
     {
+        if ($adminResponse = $this->ensureAdminAccess()) {
+            return $adminResponse;
+        }
+
+        $id = $id ?? $this->request->getVar('category_id');
         //delete selected category
         $data = $this->categoryModel->find($id);
 
@@ -209,7 +226,7 @@ class Category extends ResourceController
         }
         // in case a category is found
         else{
-            $del_category = $this->categoryModel->update($id);
+            $del_category = $this->categoryModel->delete($id);
             if(!$del_category){
                 $response = [
                     'status' => false,
@@ -233,11 +250,33 @@ class Category extends ResourceController
     }
 
     // validate category form entries
-    private function validateCategoryEntries(){
-            return $this->validate([
-                'category_name' => [
-                    'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim|is_unique[categories.categoryName]'
-                ]
-            ]);
+    private function validateCategoryEntries(string $mode = 'create'){
+        $rules = 'required|max_length[40]|min_length[3]|regex_match[/^[A-Za-z0-9 &\/._-]+$/]|trim';
+
+        if ($mode === 'create') {
+            $rules .= '|is_unique[categories.categoryName]';
+        } else {
+            $categoryId = $this->request->getVar('category_id');
+            $rules .= '|is_unique[categories.categoryName,categoryId,' . $categoryId . ']';
+        }
+
+        return $this->validate([
+            'category_name' => [
+                'rules' => $rules,
+                'label' => 'Category Name',
+            ]
+        ]);
+    }
+
+    private function ensureAdminAccess()
+    {
+        $user = auth()->user();
+        $roles = $user && method_exists($user, 'getGroups') ? $user->getGroups() : [];
+
+        if (!in_array('admin', $roles, true) && !in_array('superadmin', $roles, true)) {
+            return $this->failForbidden('Only administrators can manage categories.');
+        }
+
+        return null;
     }
 }

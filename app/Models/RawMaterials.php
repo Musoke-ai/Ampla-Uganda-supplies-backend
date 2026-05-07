@@ -13,7 +13,26 @@ class RawMaterials extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['name', 'size', 'Quantity', 'unitPrice','supplier', 'note', 'expiry', 'rawMaterialDateCreated', 'rawMaterialDateUpdated',"rawMaterialDateDeleted"];
+    protected $allowedFields    = [
+        'branchId',
+        'name',
+        'materialCode',
+        'category',
+        'size',
+        'unitOfMeasure',
+        'Quantity',
+        'unitPrice',
+        'reorderLevel',
+        'supplier',
+        'supplierContact',
+        'storageLocation',
+        'status',
+        'note',
+        'expiry',
+        'rawMaterialDateCreated',
+        'rawMaterialDateUpdated',
+        'rawMaterialDateDeleted',
+    ];
 
     // Dates
     protected $useTimestamps = false;

@@ -14,7 +14,7 @@ class Stock extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['stockItem','stockOwner', 'stockItemQuantity', 'oldStock'];
+    protected $allowedFields    = ['branchId','stockItem','stockOwner', 'stockItemQuantity', 'oldStock', 'stockItemPrice', 'itemSellingPrice', 'itemSupplier'];
 
     // Dates
     protected $useTimestamps = false;

@@ -13,7 +13,7 @@ class EmployeeRegister extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['empID', 'role', 'payment', 'amountPaid', 'dailyEmployeeDateCreated', 'dailyEmployeeDateUpdated',"dailyEmployeeDateDeleted"];
+    protected $allowedFields    = ['branchId', 'empID', 'role', 'payment', 'amountPaid', 'dailyEmployeeDateCreated', 'dailyEmployeeDateUpdated',"dailyEmployeeDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;

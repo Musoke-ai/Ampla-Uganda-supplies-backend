@@ -7,6 +7,8 @@ use App\Models\RawMaterialsRegister;
 use App\Models\RawMaterials;
 use App\Models\ProductRegister;
 use App\Models\EmployeeRegister;
+use App\Models\Employees;
+use App\Services\BranchContextService;
 
 class EmployeeDailyList extends ResourceController
  {
@@ -21,6 +23,8 @@ class EmployeeDailyList extends ResourceController
     private $rawMaterialsRegister;
     private $productRegister;
     private $employeeRegister;
+    private $employeesModel;
+    private BranchContextService $branchContext;
 
     public function __construct() {
 
@@ -28,6 +32,8 @@ class EmployeeDailyList extends ResourceController
         $this->rawMaterialsRegister = new RawMaterialsRegister();
         $this->productRegister = new ProductRegister();
         $this->employeeRegister = new EmployeeRegister();
+        $this->employeesModel = new Employees();
+        $this->branchContext = service('branchContext');
     }
 
     // fetch categories data
@@ -61,7 +67,9 @@ class EmployeeDailyList extends ResourceController
     public function index()
  {
         //fetch stock
-        $dailyList =  $this->employeeRegister->findAll();
+        $dailyList =  $this->branchContext
+            ->scopeBuilder($this->employeeRegister->orderBy('dailyEmployeeDateCreated', 'DESC'))
+            ->findAll();
         if ( empty( $dailyList ) ) {
             return $this->noDailyListData();
         } else {
@@ -90,7 +98,7 @@ class EmployeeDailyList extends ResourceController
             ]);
         }
     
-        $inputData = $this->request->getJSON(true); // get associative array from JSON input
+        $inputData = $this->request->getJSON(true);
     
         if (!is_array($inputData) || empty($inputData)) {
             return $this->respond([
@@ -99,12 +107,35 @@ class EmployeeDailyList extends ResourceController
                 'message' => 'No valid data received. Please send a non-empty array of employees.'
             ]);
         }
+
+        $branchId = $this->branchContext->resolveWritableBranchId($inputData['branchId'] ?? $this->request->getVar('branchId'));
+        if ($branchId === null) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'MissingBranch',
+                'message' => 'Select a current branch before creating the daily worker list.'
+            ], 422);
+        }
+
+        $employees = isset($inputData['employees']) && is_array($inputData['employees'])
+            ? $inputData['employees']
+            : $inputData;
     
         $batchData = [];
     
-        foreach ($inputData as $item) {
+        foreach ($employees as $item) {
             if (isset($item['id'], $item['role'], $item['pay'])) {
+                $employee = $this->employeesModel->find($item['id']);
+                if (!$employee || (int) ($employee['branchId'] ?? 0) !== $branchId) {
+                    return $this->respond([
+                        'status' => false,
+                        'error' => 'branchScope',
+                        'message' => 'One or more selected employees are outside the active branch.'
+                    ], 403);
+                }
+
                 $batchData[] = [
+                    'branchId' => $branchId,
                     'empID' => $item['id'],
                     'role' => $item['role'],
                     'payment' => $item['pay'],
@@ -133,6 +164,7 @@ class EmployeeDailyList extends ResourceController
         
                  $payload = [
                 'employeListId' => null,
+                'branchId' => $branchId,
                 'message' => 'employeeList created' 
             ];
 
@@ -170,12 +202,21 @@ class EmployeeDailyList extends ResourceController
         $id = trim( $this->request->getVar( 'id' ) );
 
         // Check if the ID is valid
-        if ( !$id || !$this->employeeRegister->find( $id ) ) {
+        $dailyEmployee = $id ? $this->employeeRegister->find($id) : null;
+        if ( !$id || !$dailyEmployee ) {
             return $this->respond( [
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing daily list ID.'
             ] );
+        }
+
+        if (!$this->recordIsInScope($dailyEmployee)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'branchScope',
+                'message' => 'This daily worker entry is outside your current branch scope.'
+            ], 403);
         }
 
         // Validate input
@@ -189,6 +230,7 @@ class EmployeeDailyList extends ResourceController
 
         // Prepare data
         $dailyListUpdateData = [
+            'branchId' => (int) ($dailyEmployee['branchId'] ?? 0),
             'empID' => $this->request->getVar( 'empID' ),
             'role' => $this->request->getVar( 'role' ),
             'payment' => $this->request->getVar( 'pay' ),
@@ -241,12 +283,21 @@ class EmployeeDailyList extends ResourceController
         $id = trim( $this->request->getVar( 'id' ) );
 
         // Check if the ID is valid
-        if ( !$id || !$this->employeeRegister->find( $id ) ) {
+        $dailyEmployee = $id ? $this->employeeRegister->find($id) : null;
+        if ( !$id || !$dailyEmployee ) {
             return $this->respond( [
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing daily list ID.'
             ] );
+        }
+
+        if (!$this->recordIsInScope($dailyEmployee)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'branchScope',
+                'message' => 'This daily worker entry is outside your current branch scope.'
+            ], 403);
         }
 
         // Perform delete operation
@@ -307,6 +358,14 @@ class EmployeeDailyList extends ResourceController
             return $this->failNotFound('No employee record found on the daily list with id ' . $id);
         }
 
+        if (!$this->recordIsInScope($dailyEmployee)) {
+            return $this->respond([
+                'status' => false,
+                'error' => 'branchScope',
+                'message' => 'This daily worker entry is outside your current branch scope.'
+            ], 403);
+        }
+
         $totalPaymentDue = (float)$dailyEmployee['payment'];
         $alreadyPaid = (float)$dailyEmployee['amountPaid'];
 
@@ -360,5 +419,16 @@ class EmployeeDailyList extends ResourceController
                 'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim'
             ]
         ] );
+    }
+
+    private function recordIsInScope(array $record): bool
+    {
+        $effectiveBranchId = $this->branchContext->getEffectiveBranchId();
+
+        if ($effectiveBranchId === null) {
+            return $this->branchContext->canUserSwitchBranches();
+        }
+
+        return (int) ($record['branchId'] ?? 0) === $effectiveBranchId;
     }
 }

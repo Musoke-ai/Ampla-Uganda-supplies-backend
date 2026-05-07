@@ -31,7 +31,7 @@ class AuthJWT extends ShieldAuthJWT
      * @var array<string, string>
      */
     public array $defaultClaims = [
-        'iss' => 'https://www.poweredstock.com/',
+        'iss' => 'Ampla Uganda',
     ];
 
     /**

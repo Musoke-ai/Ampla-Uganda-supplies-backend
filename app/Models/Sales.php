@@ -13,7 +13,20 @@ class Sales extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['saleItemId', 'saleOwner','SR_ID', 'salePrice', 'saleQuantity', 'custId'];
+    protected $allowedFields    = [
+        'branchId',
+        'saleItemId',
+        'saleOwner',
+        'SR_ID',
+        'salePrice',
+        'unitCostAtSale',
+        'lineCostAtSale',
+        'saleQuantity',
+        'custId',
+        'saleStatus',
+        'cancelledAt',
+        'cancelledBy',
+    ];
 
     // Dates
     protected $useTimestamps = false;

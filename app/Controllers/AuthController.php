@@ -7,6 +7,7 @@ use CodeIgniter\Shield\Models\UserModel;
 use CodeIgniter\Shield\Entities\User;
 use App\Models\Business;
 use App\Models\RefreshToken;
+use App\Services\BranchContextService;
 use CodeIgniter\Shield\Models\GroupModel;
 use CodeIgniter\Shield\Models\PermissionModel;
 
@@ -21,6 +22,7 @@ class AuthController extends ResourceController {
     private $Users;
     private $group;
     private $permission;
+    private BranchContextService $branchContext;
 
     public function __construct() {
         $this->UserObject = new UserModel();
@@ -28,6 +30,97 @@ class AuthController extends ResourceController {
         $this->refreshTokenModel = new RefreshToken();
         $this->group =  new GroupModel();
         $this->permission =  new PermissionModel();
+        $this->branchContext = service('branchContext');
+    }
+
+    private function defaultAppSettings(): array
+    {
+        return [
+            'minWholesaleOrder' => 500,
+            'currency' => 'UGX',
+            'autoPriceDetermination' => false,
+            'lowLevelProducts' => 10,
+            'lowLevelMaterials' => 50,
+            'notificationFrequency' => 'Weekly',
+            'theme' => 'light',
+            'navbarColor' => '#2f8f57',
+            'sidebarColor' => '#f4faf6',
+            'taxRate' => 0,
+            'allowDebtSales' => true,
+        ];
+    }
+
+    private function businessProfile(): ?array
+    {
+        $profiles = $this->businessModel->orderBy('profileId', 'ASC')->findAll(1);
+        return $profiles[0] ?? null;
+    }
+
+    private function decodeAppSettings($settings): array
+    {
+        if (is_array($settings)) {
+            return $this->normalizeAppSettings($settings);
+        }
+
+        if (!is_string($settings) || trim($settings) === '') {
+            return $this->defaultAppSettings();
+        }
+
+        $decoded = json_decode($settings, true);
+        if (!is_array($decoded)) {
+            return $this->defaultAppSettings();
+        }
+
+        return $this->normalizeAppSettings($decoded);
+    }
+
+    private function cleanNumber($value, float $fallback, float $min = 0, float $max = 1000000): float
+    {
+        $number = is_numeric($value) ? (float) $value : $fallback;
+        $number = max($min, min($max, $number));
+        return floor($number) === $number ? (int) $number : $number;
+    }
+
+    private function cleanColor($value, string $fallback): string
+    {
+        return is_string($value) && preg_match('/^#[0-9a-fA-F]{6}$/', $value)
+            ? strtolower($value)
+            : $fallback;
+    }
+
+    private function normalizeAppSettings(array $settings): array
+    {
+        $defaults = $this->defaultAppSettings();
+        $notifications = ['Daily', 'Weekly', 'Monthly', 'Never'];
+        $theme = ($settings['theme'] ?? $defaults['theme']) === 'dark' ? 'dark' : 'light';
+        $currency = isset($settings['currency']) && is_string($settings['currency'])
+            ? strtoupper(trim($settings['currency']))
+            : $defaults['currency'];
+
+        return [
+            'minWholesaleOrder' => $this->cleanNumber($settings['minWholesaleOrder'] ?? $defaults['minWholesaleOrder'], $defaults['minWholesaleOrder']),
+            'currency' => $currency !== '' ? substr($currency, 0, 12) : $defaults['currency'],
+            'autoPriceDetermination' => filter_var($settings['autoPriceDetermination'] ?? $defaults['autoPriceDetermination'], FILTER_VALIDATE_BOOLEAN),
+            'lowLevelProducts' => $this->cleanNumber($settings['lowLevelProducts'] ?? $defaults['lowLevelProducts'], $defaults['lowLevelProducts']),
+            'lowLevelMaterials' => $this->cleanNumber($settings['lowLevelMaterials'] ?? $defaults['lowLevelMaterials'], $defaults['lowLevelMaterials']),
+            'notificationFrequency' => in_array($settings['notificationFrequency'] ?? '', $notifications, true)
+                ? $settings['notificationFrequency']
+                : $defaults['notificationFrequency'],
+            'theme' => $theme,
+            'navbarColor' => $this->cleanColor($settings['navbarColor'] ?? $defaults['navbarColor'], $defaults['navbarColor']),
+            'sidebarColor' => $this->cleanColor($settings['sidebarColor'] ?? $defaults['sidebarColor'], $defaults['sidebarColor']),
+            'taxRate' => $this->cleanNumber($settings['taxRate'] ?? $defaults['taxRate'], $defaults['taxRate'], 0, 100),
+            'allowDebtSales' => filter_var($settings['allowDebtSales'] ?? $defaults['allowDebtSales'], FILTER_VALIDATE_BOOLEAN),
+        ];
+    }
+
+    private function formatProfileForResponse(array $profile): array
+    {
+        $profile['appSettingsConfigured'] = isset($profile['appSettings'])
+            && is_string($profile['appSettings'])
+            && trim($profile['appSettings']) !== '';
+        $profile['appSettings'] = $this->decodeAppSettings($profile['appSettings'] ?? null);
+        return $profile;
     }
     //post
 
@@ -52,6 +145,7 @@ class AuthController extends ResourceController {
                     ['roles' => $roles,
                     'permissions' => $permissions,
                     'email' => $user->email,
+                    'branchScope' => $this->branchContext->getUserScope((int) $user->id),
                     
                     ]   // new roles and permissions fields
                   
@@ -105,6 +199,10 @@ $this->UserObject->save($user);
 
 public function deleteUser()
 {
+    if (!$this->branchContext->canUserSwitchBranches()) {
+        return $this->failForbidden('Only branch admins can delete users.');
+    }
+
     // Attempt to find the user by ID
     $userId = $this->request->getVar( 'user_id' );
     $user = $this->UserObject->find($userId);
@@ -127,6 +225,10 @@ public function deleteUser()
 
     public function updateUserRolesAndPermissions()
     {
+        if (!$this->branchContext->canUserSwitchBranches()) {
+            return $this->failForbidden('Only branch admins can update user access.');
+        }
+
         // 1. Validation
         $rules = [
             'id'   => 'required|is_not_unique[users.id]',
@@ -142,6 +244,10 @@ public function deleteUser()
         $userId = $this->request->getVar('id');
         $roles = array_map(fn($r) => strtolower(str_replace(' ', '', trim($r))), $this->request->getVar('roles') ?? []);
         $permissions = array_map(fn($p) => strtolower(str_replace(' ', '', trim($p))), $this->request->getVar('permissions') ?? []);
+        $requestedBranchId = $this->branchContext->normalizeBranchId($this->request->getVar('branchId'));
+        $currentScope = $this->branchContext->getUserScope((int) $userId);
+        $canSwitchBranches = $this->branchContext->rolesCanSwitchBranches($roles);
+        $assignedBranchId = $requestedBranchId ?? $currentScope['assigned_branch_id'] ?? $this->branchContext->getEffectiveBranchId();
 
         // 3. Start a database transaction to ensure atomicity
         $db = \Config\Database::connect();
@@ -175,6 +281,13 @@ public function deleteUser()
             $this->permission->insertBatch($batchPermissions);
         }
 
+        $this->branchContext->assignUserToBranch(
+            (int) $userId,
+            $assignedBranchId,
+            auth()->id() ? (int) auth()->id() : null,
+            $canSwitchBranches
+        );
+
         // 7. Complete the transaction
         $db->transComplete();
 
@@ -190,6 +303,10 @@ public function deleteUser()
     }
 
     public function register() {
+        if (!$this->branchContext->canUserSwitchBranches()) {
+            return $this->failForbidden('Only branch admins can create users.');
+        }
+
         // Defined validation rules for the required fields
 $rules = [
     'username'  => 'required|alpha_numeric_space|min_length[3]',
@@ -221,6 +338,14 @@ $validatedData = $this->validator->getValidated();
 
         $roles = array_map(fn($r) => strtolower(str_replace(' ', '', trim($r))), $this->request->getVar('roles') ?? []);
         $permissions = array_map(fn($p) => strtolower(str_replace(' ', '', trim($p))), $this->request->getVar('permissions') ?? []);
+        $requestedBranchId = $this->branchContext->normalizeBranchId($this->request->getVar('branchId'));
+        $creatorBranchId = $this->branchContext->getEffectiveBranchId();
+        $canSwitchBranches = $this->branchContext->rolesCanSwitchBranches($roles);
+        $assignedBranchId = $requestedBranchId ?? $creatorBranchId;
+
+        if (!$canSwitchBranches && $assignedBranchId === null) {
+            return $this->fail('A branch must be selected before creating a branch-scoped user.');
+        }
 
         $userSaved = $this->UserObject->save($userEntityObject);
        
@@ -244,10 +369,19 @@ foreach ($permissions as $permission) {
         'permission' => $permission
     ]);
 }
+            $this->branchContext->assignUserToBranch(
+                (int) $userId,
+                $assignedBranchId,
+                auth()->id() ? (int) auth()->id() : null,
+                $canSwitchBranches
+            );
             $response = [
                 'status' => true,
                 'message' => 'Account successfully created',
-                'data' => ''
+                'data' => [
+                    'user_id' => $userId,
+                    'branchScope' => $this->branchContext->getUserScope((int) $userId),
+                ]
             ];
             return $this->respondCreated( $response );
         } else{
@@ -336,7 +470,7 @@ foreach ($permissions as $permission) {
 
                 $userData = $this->UserObject->findById( auth()->id() );
 
-                $refreshToken = $userData->generateAccessToken( 'thisismypoweredstocksecretekey' );
+                $refreshToken = $userData->generateAccessToken(env('REFRESH_TOKEN_NAME', 'ampla-uganda-refresh-token'));
                 $data = generateRefreshToken();
                 $accessToken = $data[ 'refreshToken' ];
                 $hashedToken = $data[ 'hashedToken' ];
@@ -351,7 +485,7 @@ foreach ($permissions as $permission) {
                     'expires' => time() + 120, // 2 minutes expiry time
                     // 'expires' => time() + ( 86400 * 30 ), // 30 days expiry time
                     'path' => '/', // Available in the entire domain
-                    // 'domain' => 'http://localhost/mystock', // Your domain
+                    // 'domain' => env('COOKIE_DOMAIN'), // Your domain
                     'secure' => true, // Only send over HTTPS
                     'httponly' => true, // Accessible only via HTTP protocol
                     'samesite' => 'Lax' // Helps mitigate CSRF attacks
@@ -383,9 +517,84 @@ foreach ($permissions as $permission) {
     public function profile() {
         $userId = auth()->id();
         // $businessprofile = $this->businessModel->where( 'busId', $userId )->findAll();
-        $businessprofile = $this->businessModel->findAll();
-        $data = $businessprofile[ 0 ];
+        $data = $this->businessProfile();
+        if (!$data) {
+            return $this->failNotFound('Business profile has not been configured.');
+        }
+        $data = $this->formatProfileForResponse($data);
+        $data['branchScope'] = $this->branchContext->getUserScope($userId ? (int) $userId : null);
         return $this->respondCreated( $data );
+    }
+
+    public function settings()
+    {
+        if (!auth()->id()) {
+            return $this->respond([
+                'status' => false,
+                'message' => 'Authentication failed. You must be logged in.',
+                'data' => [],
+            ], 401);
+        }
+
+        $profile = $this->businessProfile();
+        if (!$profile) {
+            return $this->failNotFound('Business profile has not been configured.');
+        }
+
+        return $this->respond([
+            'status' => true,
+            'message' => 'Settings loaded successfully.',
+            'data' => [
+                'settings' => $this->decodeAppSettings($profile['appSettings'] ?? null),
+                'configured' => isset($profile['appSettings']) && is_string($profile['appSettings']) && trim($profile['appSettings']) !== '',
+                'profileId' => $profile['profileId'],
+            ],
+        ]);
+    }
+
+    public function updateSettings()
+    {
+        if (!auth()->id()) {
+            return $this->respond([
+                'status' => false,
+                'message' => 'Authentication failed. You must be logged in.',
+                'data' => [],
+            ], 401);
+        }
+
+        if (!$this->branchContext->canUserSwitchBranches()) {
+            return $this->failForbidden('Only admins can update workspace settings.');
+        }
+
+        $payload = $this->request->getJSON(true) ?? [];
+        $settings = $payload['settings'] ?? $this->request->getVar('settings');
+
+        if (!is_array($settings)) {
+            return $this->fail('A settings object is required.');
+        }
+
+        $profile = $this->businessProfile();
+        if (!$profile) {
+            return $this->failNotFound('Business profile has not been configured.');
+        }
+
+        $cleanSettings = $this->normalizeAppSettings($settings);
+        $saved = $this->businessModel->update($profile['profileId'], [
+            'appSettings' => json_encode($cleanSettings, JSON_UNESCAPED_SLASHES),
+        ]);
+
+        if (!$saved) {
+            return $this->failServerError('Workspace settings could not be saved.');
+        }
+
+        return $this->respond([
+            'status' => true,
+            'message' => 'Workspace settings saved successfully.',
+            'data' => [
+                'settings' => $cleanSettings,
+                'profile' => $this->formatProfileForResponse($this->businessModel->find($profile['profileId'])),
+            ],
+        ]);
     }
 
     //post
@@ -436,10 +645,18 @@ public function updateProfile()
         return $this->respond($response, 401); // 401 Unauthorized
     }
 
+    if (!$this->branchContext->canUserSwitchBranches()) {
+        return $this->failForbidden('Only admins can update the business profile.');
+    }
+
     $updateData = $this->request->getVar('businessProfile');
 
+    $requestedProfileId = is_array($updateData)
+        ? ($updateData['profileId'] ?? null)
+        : ($updateData->profileId ?? null);
+
     // 2. Validate input data and presence of profileId
-    if (empty($updateData) || !isset($updateData->profileId)) {
+    if (empty($updateData) || !$requestedProfileId) {
         $response = [
             'status'  => false,
             'message' => 'Required profile data or profileId is missing.',
@@ -449,11 +666,23 @@ public function updateProfile()
     }
     
     // 3. Prepare data for update
-    $profileId = $updateData->profileId;
-    unset($updateData->profileId);
+    $updateData = (array) $updateData;
+    $profileId = $requestedProfileId;
+    unset($updateData['profileId']);
+    $allowedProfileFields = [
+        'busName',
+        'busLocation',
+        'busBuilding',
+        'busNumberShop',
+        'busContactOne',
+        'busContactTwo',
+        'busEmail',
+        'busOwner',
+    ];
+    $updateData = array_intersect_key($updateData, array_flip($allowedProfileFields));
 
     // Check if there are any fields left to update
-    if (empty((array) $updateData)) {
+    if (empty($updateData)) {
         $response = [
             'status'  => false,
             'message' => 'No fields were provided to update.',
@@ -463,9 +692,9 @@ public function updateProfile()
     }
 
     // 4. Attempt the update
-    if ($this->businessModel->update($profileId, (array) $updateData)) {
+    if ($this->businessModel->update($profileId, $updateData)) {
         // Success ✅
-        $updatedProfile = $this->businessModel->find($profileId);
+        $updatedProfile = $this->formatProfileForResponse($this->businessModel->find($profileId));
         $response = [
             'status'  => true,
             'message' => 'Profile updated successfully.',

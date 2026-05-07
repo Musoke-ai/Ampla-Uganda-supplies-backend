@@ -7,8 +7,8 @@ use CodeIgniter\Model;
 class Quotation extends Model
 {
     protected $DBGroup          = 'default';
-    protected $table            = 'invoice';
-    protected $primaryKey       = 'QTN_ID';
+    protected $table            = 'quotation';
+    protected $primaryKey       = 'QTNID';
     protected $useAutoIncrement = true;
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;

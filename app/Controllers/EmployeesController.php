@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
 use App\Models\Employees;
+use App\Services\BranchContextService;
 
 class EmployeesController extends ResourceController
  {
@@ -15,9 +16,11 @@ class EmployeesController extends ResourceController
     **/
 
     private $employeesModel;
+    private BranchContextService $branchContext;
 
     public function __construct() {
         $this->employeesModel = new Employees();
+        $this->branchContext = service('branchContext');
     }
 
     // fetch categories data
@@ -50,8 +53,9 @@ class EmployeesController extends ResourceController
 
     public function index()
  {
-        //fetch stock
-        $employeeData =  $this->employeesModel->findAll();
+        $employeeData = $this->branchContext
+            ->scopeBuilder($this->employeesModel)
+            ->findAll();
         if ( empty( $employeeData ) ) {
             return $this->noEmployeesData();
         } else {
@@ -73,8 +77,13 @@ class EmployeesController extends ResourceController
     public function addEmployee()
  {
         $data = [];
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'A branch must be selected first.'], 422);
+        }
         if ( $this->request->getMethod() === 'post' ) {
             $data = [
+                'branchId' => $branchId,
                 'empName' => $this->request->getVar( 'empName' ),
                 'empEmail' => $this->request->getVar( 'empEmail' ),
                 'empLocation' => $this->request->getVar( 'empLocation' ),
@@ -150,14 +159,18 @@ class EmployeesController extends ResourceController
  {
         // Fetch and trim ID
         $id = trim( $this->request->getVar( 'empID' ) );
+        $employee = $id ? $this->employeesModel->find($id) : null;
 
         // Check if the ID is valid
-        if ( !$id || !$this->employeesModel->find( $id ) ) {
+        if ( !$id || !$employee ) {
             return $this->respond( [
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing employee ID.'
             ] );
+        }
+        if (!$this->branchContext->recordMatchesCurrentBranch($employee)) {
+            return $this->respond(['status' => false, 'message' => 'This employee is outside your current branch scope.'], 403);
         }
 
         // Validate input
@@ -171,6 +184,7 @@ class EmployeesController extends ResourceController
 
         // Prepare data
         $employeeUpdateData = [
+            'branchId' => $this->branchContext->resolveWritableBranchId($this->request->getVar( 'branchId' )) ?? ($employee['branchId'] ?? null),
             'empName' => $this->request->getVar( 'empName' ),
             'empEmail' => $this->request->getVar( 'empEmail' ),
             'empLocation' => $this->request->getVar( 'empLocation' ),
@@ -225,14 +239,18 @@ class EmployeesController extends ResourceController
  {
         // Fetch and trim ID
         $id = trim( $this->request->getVar( 'empID' ) );
+        $employee = $id ? $this->employeesModel->find($id) : null;
 
         // Check if the ID is valid
-        if ( !$id || !$this->employeesModel->find( $id ) ) {
+        if ( !$id || !$employee ) {
             return $this->respond( [
                 'status' => false,
                 'error' => 'invalidId',
                 'message' => 'Invalid or missing employee ID.'
             ] );
+        }
+        if (!$this->branchContext->recordMatchesCurrentBranch($employee)) {
+            return $this->respond(['status' => false, 'message' => 'This employee is outside your current branch scope.'], 403);
         }
 
         // Perform delete operation
@@ -267,5 +285,11 @@ class EmployeesController extends ResourceController
                 'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim|is_unique[categories.categoryName]'
             ]
         ] );
+    }
+
+    private function normalizeBranchId($branchId)
+    {
+        $branchId = trim((string) $branchId);
+        return $branchId === '' ? null : (int) $branchId;
     }
 }

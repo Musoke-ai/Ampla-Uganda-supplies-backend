@@ -8,10 +8,10 @@
 <body style="width: 100%;height:100%; display:flex;justify-content:center;align-items:center;">
     <div>
         <h1>
-            Welcome to poweredStock.com
+            Welcome to Ampla Uganda
         </h1>
         <p>
-        Visit <a href="https://www.poweredstock.com">www.poweredstock.com </a>for more services.
+        Ampla Uganda business management API is running.
         </p>
     </div>
 </body>

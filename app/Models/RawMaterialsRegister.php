@@ -13,7 +13,7 @@ class RawMaterialsRegister extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['materialId', 'quantity', 'totalCost', 'initials','dailyRawmaterialsDateCreated', 'dailyRawmaterialsDateUpdated',"dailyRawmaterialsDateDeleted"];
+    protected $allowedFields    = ['branchId', 'batchId', 'orderId', 'materialId', 'quantity', 'totalCost', 'initials','dailyRawmaterialsDateCreated', 'dailyRawmaterialsDateUpdated',"dailyRawmaterialsDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;

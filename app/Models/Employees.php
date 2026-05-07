@@ -13,7 +13,7 @@ class Employees extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['empName', 'empEmail', 'empLocation', 'empContact','empRole','empSalary', 'empStatus',"startDate","endDate"];
+    protected $allowedFields    = ['branchId','empName', 'empEmail', 'empLocation', 'empContact','empRole','empSalary', 'empStatus',"startDate","endDate"];
 
     // Dates
     protected $useTimestamps = false;

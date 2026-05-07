@@ -13,7 +13,7 @@ class Business extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['busId','busName', 'busLocation', 'busBuilding', 'busNumberShop', 'busContactOne', 'busContactTwo', 'busEmail', 'busOwner'];
+    protected $allowedFields    = ['busId','busName', 'busLocation', 'busBuilding', 'busNumberShop', 'busContactOne', 'busContactTwo', 'busEmail', 'busOwner', 'appSettings'];
 
     // Dates
     protected $useTimestamps = false;

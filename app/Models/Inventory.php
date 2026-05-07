@@ -13,7 +13,30 @@ class Inventory extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['itemName', 'itemCategoryId', 'itemModel', 'itemQuality','itemQuantity', 'itemNumber', 'itemCondition', 'itemSize', 'itemStockPrice', 'itemLeastPrice', 'itemNotes', 'itemOwner', 'itemDateCreated'];
+    protected $allowedFields    = [
+        'branchId',
+        'itemName',
+        'itemCategoryId',
+        'itemModel',
+        'itemQuality',
+        'itemQuantity',
+        'itemNumber',
+        'itemSku',
+        'itemBarcode',
+        'itemBrand',
+        'itemProductType',
+        'itemUnit',
+        'itemSupplier',
+        'itemReorderLevel',
+        'itemWholesalePrice',
+        'itemCondition',
+        'itemSize',
+        'itemStockPrice',
+        'itemLeastPrice',
+        'itemNotes',
+        'itemOwner',
+        'itemDateCreated'
+    ];
 
     // Dates
     protected $useTimestamps = false;

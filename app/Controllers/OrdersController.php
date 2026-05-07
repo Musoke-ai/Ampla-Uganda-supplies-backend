@@ -4,6 +4,9 @@ namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
 use App\Models\Orders;
+use App\Models\CustomerModel;
+use App\Models\Inventory;
+use App\Services\BranchContextService;
 
 use function PHPUnit\Framework\isEmpty;
 
@@ -17,9 +20,15 @@ class OrdersController extends ResourceController
     **/
 
     private $orderModel;
+    private CustomerModel $customerModel;
+    private Inventory $inventoryModel;
+    private BranchContextService $branchContext;
 
     public function __construct() {
         $this->orderModel = new Orders();
+        $this->customerModel = new CustomerModel();
+        $this->inventoryModel = new Inventory();
+        $this->branchContext = service('branchContext');
     }
 
     // fetch categories data
@@ -63,7 +72,9 @@ class OrdersController extends ResourceController
         //     return $this->respond( $data );
         //     exit();
         // }
-        $orders = $this->orderModel->findAll();
+        $orders = $this->branchContext
+            ->scopeBuilder($this->orderModel)
+            ->findAll();
         if ( empty( $orders ) ) {
             return $this->failNotFound( 'No orders found.' );
         }
@@ -78,13 +89,22 @@ class OrdersController extends ResourceController
 
     public function create()
  {
+        $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId'));
+        if ($branchId === null) {
+            return $this->respond(['status' => false, 'message' => 'A branch must be selected first.'], 422);
+        }
         //add new order
         if ( !( $this->request->getMethod() === 'post' ) ) {
             return $this->validationFail();
         }
         // in case form validation is passed
         else {
+            if (!$this->relatedRecordsMatchBranch($branchId)) {
+                return $this->respond(['status' => false, 'message' => 'Customer or product does not belong to the selected branch.'], 422);
+            }
+
             $orderData = [
+                'branchId' => $branchId,
                 'custId' => $this->request->getVar( 'custId' ),
                 'prodId' => $this->request->getVar( 'prodId' ),
                 'customSize' => $this->request->getVar( 'customSize' ),
@@ -252,6 +272,9 @@ public function update($i = null)
     if (!$order) {
         return $this->failNotFound('Order not found with ID: ' . $id); // 404 Not Found
     }
+    if (!$this->branchContext->recordMatchesCurrentBranch($order)) {
+        return $this->fail('This order is outside your current branch scope.', 403);
+    }
 
     // 4. Use a switch statement to handle different actions
     switch ($action) {
@@ -329,8 +352,17 @@ private function handlePaymentUpdate($order)
  */
 private function handleDetailsUpdate($order)
 {
+    $branchId = $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId')) ?? ($order['branchId'] ?? null);
+    if ($branchId === null) {
+        return $this->fail('A branch must be selected first.', 422);
+    }
+    if (!$this->relatedRecordsMatchBranch($branchId)) {
+        return $this->fail('Customer or product does not belong to the selected branch.', 422);
+    }
+
     // NOTE: Using CodeIgniter's Validation library here is highly recommended for production.
     $data = [
+        'branchId'         => $branchId,
         'custId'           => $this->request->getVar('custId'),
         'prodId'           => $this->request->getVar('prodId'),
         'customSize'       => $this->request->getVar('customSize'),
@@ -372,6 +404,12 @@ private function handleDetailsUpdate($order)
     }
 }
 
+private function normalizeBranchId($branchId)
+{
+    $branchId = trim((string) $branchId);
+    return $branchId === '' ? null : (int) $branchId;
+}
+
     /**
     * Delete the designated resource object from the model
     *
@@ -386,6 +424,9 @@ private function handleDetailsUpdate($order)
 
         if ( empty( $data ) ) {
             return $this->nostockdata();
+        }
+        if (!$this->branchContext->recordMatchesCurrentBranch($data)) {
+            return $this->respond(['status' => false, 'message' => 'This order is outside your current branch scope.'], 403);
         }
         // in case an order is found
         else {
@@ -426,5 +467,27 @@ private function handleDetailsUpdate($order)
         //         'rules' => 'required|max_length[20]|min_length[3]|alpha_space|trim|is_unique[categories.categoryName]'
         // ]
         // ] );
+    }
+
+    private function relatedRecordsMatchBranch(int $branchId): bool
+    {
+        $custId = $this->request->getVar('custId');
+        $prodId = $this->request->getVar('prodId');
+
+        if ($custId) {
+            $customer = $this->customerModel->find($custId);
+            if (!$customer || (int) ($customer['branchId'] ?? 0) !== $branchId) {
+                return false;
+            }
+        }
+
+        if ($prodId) {
+            $product = $this->inventoryModel->find($prodId);
+            if (!$product || (int) ($product['branchId'] ?? 0) !== $branchId) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

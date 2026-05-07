@@ -13,7 +13,7 @@ class Expense extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = ['category', 'description', 'amount', 'givenTo','remarks', 'expenseDateCreated', 'expenseDateUpdated',"expenseDateDeleted"];
+    protected $allowedFields    = ['branchId', 'category', 'description', 'amount', 'givenTo','remarks', 'expenseDateCreated', 'expenseDateUpdated',"expenseDateDeleted"];
 
     // Dates
     protected $useTimestamps = false;
