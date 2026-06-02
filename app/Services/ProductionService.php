@@ -91,7 +91,7 @@ class ProductionService
     public function getLowStockRawMaterials(int $threshold = 10): array
     {
         $builder = $this->rawMaterialsModel
-            ->select('materialId, materialCode, name, category, size, unitOfMeasure, Quantity, unitPrice, reorderLevel, supplier, supplierContact, storageLocation, status, note, expiry')
+            ->select('materialId, materialCode, rawMaterialBarcode, name, category, size, unitOfMeasure, Quantity, unitPrice, reorderLevel, supplier, supplierContact, storageLocation, status, note, expiry')
             ->groupStart()
                 ->where('Quantity <= COALESCE(NULLIF(reorderLevel, 0), ' . max(0, $threshold) . ')', null, false)
             ->groupEnd()

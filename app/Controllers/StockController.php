@@ -70,7 +70,7 @@ class StockController extends ResourceController
     {
         $data = [];
         $oldStock = 3;
-        if($this->request->getMethod() === 'post'){
+        if(strtolower($this->request->getMethod()) === 'post'){
                $data = [
                'branchId' => $this->normalizeBranchId($this->request->getVar('branchId')),
                'stockItem' => $this->request->getVar('stockItem'),
@@ -132,7 +132,7 @@ else{
     public function create()
     {
         //add new category
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())){
+        if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries())){
             return $this->validationFail();
         }
         // in case form validation is passed
@@ -195,7 +195,7 @@ else{
         $id = trim($this->request->getVar('category_id'));
         $data = $this->stockModel->find($id);
 
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())){
+        if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries())){
             return $this->validationFail();
         }
         // in case form validation fails

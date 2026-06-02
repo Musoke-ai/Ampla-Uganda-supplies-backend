@@ -13,6 +13,7 @@ use CodeIgniter\Shield\Models\UserModel;
 use CodeIgniter\Shield\Entities\User;
 use App\Models\Stock;
 use App\Services\BranchContextService;
+use Config\Database;
 
 class Retrievals extends ResourceController
 {
@@ -185,7 +186,7 @@ class Retrievals extends ResourceController
     // public function searchStock($keyword = null)
     // {
     //     //stock history
-    //     if(!($this->request->getMethod() === 'post' && $this->validateRetrievals('searchstock'))){
+    //     if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateRetrievals('searchstock'))){
     //         // return $this->validationFail();
             
     //         return $this->respond('Hello');
@@ -219,12 +220,7 @@ public function getDebts(){
         return $this->respond($debts);
         exit();
     }else{
-        $response = [
-            'status' => false,
-            'error' => 'NoDebtsFound',
-            'message' => 'An error occured or no debts found!'
-        ];
-        return $this->respond($response);
+        return $this->respond([]);
         exit();
     }
     }
@@ -252,5 +248,139 @@ public function getSales(){
         exit();
     }
     }
+
+public function getReceipts()
+{
+    $db = Database::connect();
+    $dateFrom = trim((string) ($this->request->getGet('date_from') ?? ''));
+    $dateTo = trim((string) ($this->request->getGet('date_to') ?? ''));
+
+    $builder = $db->table('receipt r')
+        ->select(
+            'r.SR_ID AS receiptId,
+            r.branchId,
+            r.createdBy,
+            r.timeStamp AS receiptCode,
+            r.srDateCreated AS issuedAt,
+            COALESCE(r.discount, 0) AS discountAmount,
+            COALESCE(r.dueAmount, 0) AS dueAmount,
+            COALESCE(r.amountPaid, 0) AS tenderedAmount,
+            r.moreInfo,
+            r.paymentMethod,
+            r.receiptStatus,
+            b.branchName,
+            b.branchLocation,
+            b.branchContact,
+            s.saleId,
+            s.saleItemId,
+            s.saleQuantity,
+            s.salePrice,
+            s.custId,
+            i.itemName,
+            i.itemSku,
+            i.itemBarcode,
+            i.itemUnit,
+            c.custName AS customerName,
+            c.custContact AS customerContact,
+            c.custEmail AS customerEmail,
+            c.custLocation AS customerLocation',
+            false
+        )
+        ->join('sales s', 's.SR_ID = r.SR_ID', 'left')
+        ->join('inventory i', 'i.itemId = s.saleItemId', 'left')
+        ->join('customers c', 'c.custId = s.custId', 'left')
+        ->join('branches b', 'b.branchId = r.branchId', 'left')
+        ->groupStart()
+            ->where('r.receiptStatus <>', 'cancelled')
+            ->orWhere('r.receiptStatus IS NULL', null, false)
+        ->groupEnd()
+        ->groupStart()
+            ->where('s.saleStatus <>', 'cancelled')
+            ->orWhere('s.saleStatus IS NULL', null, false)
+        ->groupEnd()
+        ->orderBy('r.srDateCreated', 'DESC')
+        ->orderBy('r.SR_ID', 'DESC')
+        ->orderBy('s.saleId', 'ASC');
+
+    $this->branchContext->scopeBuilder($builder, 'r.branchId');
+
+    if ($dateFrom !== '') {
+        $builder->where('DATE(r.srDateCreated) >=', $dateFrom);
+    }
+
+    if ($dateTo !== '') {
+        $builder->where('DATE(r.srDateCreated) <=', $dateTo);
+    }
+
+    $rows = $builder->get()->getResultArray();
+    $receipts = [];
+
+    foreach ($rows as $row) {
+        $receiptId = (int) ($row['receiptId'] ?? 0);
+
+        if ($receiptId === 0) {
+            continue;
+        }
+
+        if (!isset($receipts[$receiptId])) {
+            $receipts[$receiptId] = [
+                'receiptId' => $receiptId,
+                'receiptNumber' => $receiptId,
+                'receiptCode' => $row['receiptCode'] ?? '',
+                'issuedAt' => $row['issuedAt'] ?? null,
+                'branchId' => isset($row['branchId']) ? (int) $row['branchId'] : null,
+                'branchName' => $row['branchName'] ?? '',
+                'branchLocation' => $row['branchLocation'] ?? '',
+                'branchContact' => $row['branchContact'] ?? '',
+                'createdBy' => isset($row['createdBy']) ? (int) $row['createdBy'] : null,
+                'customerId' => isset($row['custId']) ? (int) $row['custId'] : null,
+                'customerName' => $row['customerName'] ?: 'Walk-in Customer',
+                'customerContact' => $row['customerContact'] ?? '',
+                'customerEmail' => $row['customerEmail'] ?? '',
+                'customerLocation' => $row['customerLocation'] ?? '',
+                'paymentMethod' => $row['paymentMethod'] ?: 'Cash',
+                'discountAmount' => (float) ($row['discountAmount'] ?? 0),
+                'taxAmount' => 0,
+                'tenderedAmount' => (float) ($row['tenderedAmount'] ?? 0),
+                'dueAmount' => (float) ($row['dueAmount'] ?? 0),
+                'receiptStatus' => $row['receiptStatus'] ?: 'completed',
+                'moreInfo' => $row['moreInfo'] ?? '',
+                'items' => [],
+                'subtotal' => 0,
+                'total' => 0,
+                'lineCount' => 0,
+            ];
+        }
+
+        if (!empty($row['saleId'])) {
+            $quantity = (float) ($row['saleQuantity'] ?? 0);
+            $unitPrice = (float) ($row['salePrice'] ?? 0);
+            $lineTotal = round($quantity * $unitPrice, 2);
+
+            $receipts[$receiptId]['items'][] = [
+                'saleId' => (int) $row['saleId'],
+                'saleItemId' => isset($row['saleItemId']) ? (int) $row['saleItemId'] : null,
+                'itemName' => $row['itemName'] ?: ('Item #' . ($row['saleItemId'] ?? '')),
+                'itemSku' => $row['itemSku'] ?? '',
+                'itemBarcode' => $row['itemBarcode'] ?? '',
+                'itemUnit' => $row['itemUnit'] ?? '',
+                'saleQuantity' => $quantity,
+                'salePrice' => $unitPrice,
+                'lineTotal' => $lineTotal,
+            ];
+
+            $receipts[$receiptId]['subtotal'] += $lineTotal;
+            $receipts[$receiptId]['lineCount']++;
+        }
+    }
+
+    foreach ($receipts as &$receipt) {
+        $receipt['subtotal'] = round((float) $receipt['subtotal'], 2);
+        $receipt['total'] = round($receipt['subtotal'] - (float) $receipt['discountAmount'] + (float) $receipt['taxAmount'], 2);
+    }
+    unset($receipt);
+
+    return $this->respond(array_values($receipts));
+}
 
 }

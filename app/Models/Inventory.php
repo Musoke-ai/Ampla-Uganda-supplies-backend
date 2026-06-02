@@ -23,6 +23,7 @@ class Inventory extends Model
         'itemNumber',
         'itemSku',
         'itemBarcode',
+        'itemImage',
         'itemBrand',
         'itemProductType',
         'itemUnit',

@@ -30,6 +30,16 @@ class SalesTable extends Migration
                 'attributes' => 'unsigned',
                 // 'default' => 'none'
             ],
+            'custId' => [
+                'type' => 'INT',
+                'constraint' => 11,
+                'null' => true,
+            ],
+            'SR_ID' => [
+                'type' => 'INT',
+                'constraint' => 11,
+                'null' => true,
+            ],
             'custContacts' => [
                 'type' => 'varchar',
                 'constraint' => 150,

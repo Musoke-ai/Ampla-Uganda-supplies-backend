@@ -3,11 +3,14 @@
 namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
+use App\Controllers\Traits\SecuresInput;
 use App\Models\Employees;
 use App\Services\BranchContextService;
 
 class EmployeesController extends ResourceController
  {
+    use SecuresInput;
+
     /** This controller holds the following functions
     = Check presence of data
     = Validation check
@@ -81,18 +84,18 @@ class EmployeesController extends ResourceController
         if ($branchId === null) {
             return $this->respond(['status' => false, 'message' => 'A branch must be selected first.'], 422);
         }
-        if ( $this->request->getMethod() === 'post' ) {
+        if ( strtolower($this->request->getMethod()) === 'post' ) {
             $data = [
                 'branchId' => $branchId,
-                'empName' => $this->request->getVar( 'empName' ),
-                'empEmail' => $this->request->getVar( 'empEmail' ),
-                'empLocation' => $this->request->getVar( 'empLocation' ),
-                'empContact' => $this->request->getVar( 'empContact' ),
-                'empRole' => $this->request->getVar( 'empRole' ),
-                'empSalary' => $this->request->getVar( 'empSalary' ),
-                'empStatus' => $this->request->getVar( 'empStatus' ),
-                'startDate' => $this->request->getVar( 'startDate' ),
-                'endDate' => $this->request->getVar( 'endDate' ),
+                'empName' => $this->secureText($this->request->getVar( 'empName' ), 200),
+                'empEmail' => $this->secureEmail($this->request->getVar( 'empEmail' )) ?? '',
+                'empLocation' => $this->secureText($this->request->getVar( 'empLocation' ), 100),
+                'empContact' => $this->secureText($this->request->getVar( 'empContact' ), 100),
+                'empRole' => $this->secureText($this->request->getVar( 'empRole' ), 100),
+                'empSalary' => $this->secureNonNegativeDecimal($this->request->getVar( 'empSalary' ), 0),
+                'empStatus' => $this->secureInt($this->request->getVar( 'empStatus' ), 1),
+                'startDate' => $this->secureText($this->request->getVar( 'startDate' ), 250, true),
+                'endDate' => $this->secureText($this->request->getVar( 'endDate' ), 250, true),
             ];
             $insertQuery  =  $this->employeesModel->insert( $data );
             if ( empty( $insertQuery ) ) {
@@ -174,7 +177,7 @@ class EmployeesController extends ResourceController
         }
 
         // Validate input
-        if ( !( $this->request->getMethod() === 'post' && $this->validateCategoryEntries() ) ) {
+        if ( !( strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries() ) ) {
             return $this->respond( [
                 'status' => false,
                 'error' => 'validationFailed',
@@ -185,15 +188,15 @@ class EmployeesController extends ResourceController
         // Prepare data
         $employeeUpdateData = [
             'branchId' => $this->branchContext->resolveWritableBranchId($this->request->getVar( 'branchId' )) ?? ($employee['branchId'] ?? null),
-            'empName' => $this->request->getVar( 'empName' ),
-            'empEmail' => $this->request->getVar( 'empEmail' ),
-            'empLocation' => $this->request->getVar( 'empLocation' ),
-            'empContact' => $this->request->getVar( 'empContact' ),
-            'empRole' => $this->request->getVar( 'empRole' ),
-            'empSalary' => $this->request->getVar( 'empSalary' ),
-            'empStatus' => $this->request->getVar( 'empStatus' ),
-            'startDate' => $this->request->getVar( 'startDate' ),
-            'endDate' => $this->request->getVar( 'endDate' ),
+            'empName' => $this->secureText($this->request->getVar( 'empName' ), 200),
+            'empEmail' => $this->secureEmail($this->request->getVar( 'empEmail' )) ?? '',
+            'empLocation' => $this->secureText($this->request->getVar( 'empLocation' ), 100),
+            'empContact' => $this->secureText($this->request->getVar( 'empContact' ), 100),
+            'empRole' => $this->secureText($this->request->getVar( 'empRole' ), 100),
+            'empSalary' => $this->secureNonNegativeDecimal($this->request->getVar( 'empSalary' ), 0),
+            'empStatus' => $this->secureInt($this->request->getVar( 'empStatus' ), 1),
+            'startDate' => $this->secureText($this->request->getVar( 'startDate' ), 250, true),
+            'endDate' => $this->secureText($this->request->getVar( 'endDate' ), 250, true),
         ];
 
         // Ensure data is not empty before updating

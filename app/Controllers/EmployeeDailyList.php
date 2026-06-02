@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
+use App\Controllers\Traits\SecuresInput;
 use App\Models\RawMaterialsRegister;
 use App\Models\RawMaterials;
 use App\Models\ProductRegister;
@@ -12,6 +13,8 @@ use App\Services\BranchContextService;
 
 class EmployeeDailyList extends ResourceController
  {
+    use SecuresInput;
+
     /** This controller holds the following functions
     = Check presence of data
     = Validation check
@@ -90,7 +93,7 @@ class EmployeeDailyList extends ResourceController
 
     public function createList()
     {
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
                 'error' => 'RequestMethodError',
@@ -136,9 +139,9 @@ class EmployeeDailyList extends ResourceController
 
                 $batchData[] = [
                     'branchId' => $branchId,
-                    'empID' => $item['id'],
-                    'role' => $item['role'],
-                    'payment' => $item['pay'],
+                    'empID' => $this->secureInt($item['id'], 0),
+                    'role' => $this->secureText($item['role'], 250),
+                    'payment' => $this->secureNonNegativeDecimal($item['pay'], 0),
                     'amountPaid' => 0,
                 ];
             }
@@ -220,7 +223,7 @@ class EmployeeDailyList extends ResourceController
         }
 
         // Validate input
-        if ( !( $this->request->getMethod() === 'post') ) {
+        if ( !( strtolower($this->request->getMethod()) === 'post') ) {
             return $this->respond( [
                 'status' => false,
                 'error' => 'validationFailed',
@@ -231,10 +234,10 @@ class EmployeeDailyList extends ResourceController
         // Prepare data
         $dailyListUpdateData = [
             'branchId' => (int) ($dailyEmployee['branchId'] ?? 0),
-            'empID' => $this->request->getVar( 'empID' ),
-            'role' => $this->request->getVar( 'role' ),
-            'payment' => $this->request->getVar( 'pay' ),
-            'amountPaid' => $this->request->getVar( 'amountPaid'),
+            'empID' => $this->secureInt($this->request->getVar( 'empID' ), 0),
+            'role' => $this->secureText($this->request->getVar( 'role' ), 250),
+            'payment' => $this->secureNonNegativeDecimal($this->request->getVar( 'pay' ), 0),
+            'amountPaid' => $this->secureNonNegativeDecimal($this->request->getVar( 'amountPaid'), 0),
         ];
 
         // Ensure data is not empty before updating
@@ -333,7 +336,7 @@ class EmployeeDailyList extends ResourceController
     */
     public function payEmployee()
     {
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
                 'error' => 'RequestMethodError',
@@ -342,7 +345,7 @@ class EmployeeDailyList extends ResourceController
         }
 
         $id = trim($this->request->getVar('id'));
-        $amountToPay = $this->request->getVar('amountPaid');
+        $amountToPay = $this->secureDecimal($this->request->getVar('amountPaid'), null);
 
         if (empty($id) || !is_numeric($amountToPay) || $amountToPay <= 0) {
             return $this->respond([

@@ -99,7 +99,7 @@ class StockC extends ResourceController
     public function create()
     {
         //add new category
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())){
+        if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries())){
             return $this->validationFail();
         }
         // in case form validation is passed
@@ -163,7 +163,7 @@ class StockC extends ResourceController
         $id = trim($this->request->getVar('category_id'));
         $data = $this->stockModel->find($id);
 
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries())){
+        if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries())){
             return $this->validationFail();
         }
         // in case form validation fails

@@ -2,12 +2,15 @@
 
 namespace App\Controllers;
 
+use App\Controllers\Traits\SecuresInput;
 use App\Models\Branches;
 use App\Services\BranchContextService;
 use CodeIgniter\RESTful\ResourceController;
 
 class BranchesController extends ResourceController
 {
+    use SecuresInput;
+
     private Branches $branchesModel;
     private BranchContextService $branchContext;
 
@@ -46,12 +49,16 @@ class BranchesController extends ResourceController
             return $adminResponse;
         }
 
-        if ($this->request->getMethod() !== 'post' || !$this->validateBranchEntries()) {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
-                'error' => 'validationError',
-                'message' => $this->validator ? $this->validator->getErrors() : 'Invalid request.',
-            ]);
+                'error' => 'requestMethodError',
+                'message' => 'Branch details could not be submitted. Please try again.',
+            ], 405);
+        }
+
+        if (!$this->validateBranchEntries()) {
+            return $this->branchValidationFail();
         }
 
         $data = $this->getBranchPayload();
@@ -93,12 +100,16 @@ class BranchesController extends ResourceController
             ]);
         }
 
-        if ($this->request->getMethod() !== 'post' || !$this->validateBranchEntries()) {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
-                'error' => 'validationError',
-                'message' => $this->validator ? $this->validator->getErrors() : 'Invalid request.',
-            ]);
+                'error' => 'requestMethodError',
+                'message' => 'Branch details could not be submitted. Please try again.',
+            ], 405);
+        }
+
+        if (!$this->validateBranchEntries()) {
+            return $this->branchValidationFail();
         }
 
         $updated = $this->branchesModel->update($branchId, $this->getBranchPayload());
@@ -175,17 +186,17 @@ class BranchesController extends ResourceController
 
     private function getBranchPayload(): array
     {
-        $branchCode = trim((string) $this->request->getVar('branchCode'));
+        $branchCode = $this->secureText($this->request->getVar('branchCode'), 100, true);
 
         $payload = [
-            'branchName'        => trim((string) $this->request->getVar('branchName')),
-            'branchCode'        => $branchCode !== '' ? strtoupper($branchCode) : null,
-            'branchLocation'    => trim((string) $this->request->getVar('branchLocation')) ?: null,
-            'branchContact'     => trim((string) $this->request->getVar('branchContact')) ?: null,
-            'branchEmail'       => trim((string) $this->request->getVar('branchEmail')) ?: null,
-            'branchManager'     => trim((string) $this->request->getVar('branchManager')) ?: null,
+            'branchName'        => $this->secureText($this->request->getVar('branchName'), 200),
+            'branchCode'        => $branchCode !== null && $branchCode !== '' ? strtoupper($branchCode) : null,
+            'branchLocation'    => $this->secureText($this->request->getVar('branchLocation'), 255, true),
+            'branchContact'     => $this->secureText($this->request->getVar('branchContact'), 100, true),
+            'branchEmail'       => $this->secureEmail($this->request->getVar('branchEmail')),
+            'branchManager'     => $this->secureText($this->request->getVar('branchManager'), 200, true),
             'branchStatus'      => (int) ($this->request->getVar('branchStatus') ?? 1),
-            'branchDescription' => trim((string) $this->request->getVar('branchDescription')) ?: null,
+            'branchDescription' => $this->secureText($this->request->getVar('branchDescription'), 1000, true),
         ];
 
         if (db_connect()->fieldExists('allowDebtSales', 'branches')) {
@@ -228,7 +239,27 @@ class BranchesController extends ResourceController
             'allowDebtSales' => [
                 'rules' => 'permit_empty|in_list[inherit,0,1,true,false]',
             ],
+            'branchStatus' => [
+                'rules' => 'permit_empty|in_list[0,1]',
+            ],
+            'branchDescription' => [
+                'rules' => 'permit_empty|max_length[1000]',
+            ],
         ]);
+    }
+
+    private function branchValidationFail()
+    {
+        $errors = $this->validator ? $this->validator->getErrors() : [];
+
+        return $this->respond([
+            'status' => false,
+            'error' => 'validationError',
+            'message' => empty($errors)
+                ? 'Please review the branch details and try again.'
+                : implode(' ', array_values($errors)),
+            'errors' => $errors,
+        ], 422);
     }
 
     private function broadcastBranchEvent(string $event, ?int $branchId, string $message): void

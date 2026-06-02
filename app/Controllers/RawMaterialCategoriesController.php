@@ -29,7 +29,7 @@ class RawMaterialCategoriesController extends ResourceController
 
     public function create()
     {
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond(['status' => false, 'message' => 'Invalid request method.'], 405);
         }
 
@@ -64,7 +64,7 @@ class RawMaterialCategoriesController extends ResourceController
 
     public function update($id = null)
     {
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond(['status' => false, 'message' => 'Invalid request method.'], 405);
         }
 
@@ -194,7 +194,9 @@ class RawMaterialCategoriesController extends ResourceController
 
     private function cleanText($value, bool $nullable = false): ?string
     {
-        $cleaned = trim(preg_replace('/\s+/', ' ', (string) ($value ?? '')));
+        $cleaned = strip_tags((string) ($value ?? ''));
+        $cleaned = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $cleaned) ?? '';
+        $cleaned = trim(preg_replace('/\s+/', ' ', $cleaned));
 
         if ($cleaned === '') {
             return $nullable ? null : '';

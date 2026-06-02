@@ -100,9 +100,11 @@ class Autoload extends AutoloadConfig
      * @phpstan-var list<string>
      */
     public $helpers = [
+        'auth',
+        'setting',
         'refresh_token_helper',
         'get_bearerToken',
         'handle_cookie',
-       'pusher_helper',
+        'pusher_helper',
     ];
 }

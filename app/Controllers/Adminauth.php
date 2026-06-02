@@ -75,7 +75,7 @@ class Adminauth extends ResourceController
     public function registerAdmin($icon)
     {
         //register system administrator
-        if($this->request->getMethod() === 'post' && $this->validateAdminEntries('signupadmin')){
+        if(strtolower($this->request->getMethod()) === 'post' && $this->validateAdminEntries('signupadmin')){
 
             // business logo upload
             $input = $this->validate([
@@ -152,7 +152,7 @@ class Adminauth extends ResourceController
     public function loginAdmin()
     {
         //login an adiministrator
-        if($this->request->getMethod() === 'post' && $this->validateAdminEntries('logadmin')){
+        if(strtolower($this->request->getMethod()) === 'post' && $this->validateAdminEntries('logadmin')){
             $admin_email = $this->request->getVar('admin_log_email');
             $admin_password = trim($this->request->getVar('admin_log_password'));
             $data = $this->adminModel->where('adEmail', $admin_email)->first();
@@ -291,7 +291,7 @@ class Adminauth extends ResourceController
         }
         // in case an admin profile to update exists
         else{
-            if(!($this->request->getMethod() === 'post' && $this->validateAdminEntries('editadmin'))){
+            if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateAdminEntries('editadmin'))){
                 return $this->validationFail();
             }
             // in case form validation is passed 

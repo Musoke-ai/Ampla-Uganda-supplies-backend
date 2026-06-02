@@ -1,0 +1,30 @@
+# Apache virtual host example for Ampla ERP backend.
+#
+# The important part is DocumentRoot: it must point to the CodeIgniter
+# public directory, not the project root. Keep app/, vendor/, writable/,
+# .env, and composer files outside the public web root.
+#
+# Replace example domains and paths before using this on a server.
+
+<VirtualHost *:80>
+    ServerName api.example.com
+    ServerAlias www.api.example.com
+
+    DocumentRoot /var/www/amplaerp/public
+
+    <Directory /var/www/amplaerp/public>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    # Preserve Authorization headers for JWT requests.
+    SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+
+    ErrorLog ${APACHE_LOG_DIR}/amplaerp-error.log
+    CustomLog ${APACHE_LOG_DIR}/amplaerp-access.log combined
+</VirtualHost>
+
+# After SSL is installed, redirect HTTP to HTTPS and use a matching
+# :443 virtual host with SSLEngine/SSLCertificateFile configured by
+# Certbot, cPanel, or your hosting provider.

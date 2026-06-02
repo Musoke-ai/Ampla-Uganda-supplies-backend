@@ -2,11 +2,14 @@
 
 namespace App\Controllers;
 
+use App\Controllers\Traits\SecuresInput;
 use CodeIgniter\RESTful\ResourceController;
 use CodeIgniter\Shield\Models\UserModel;
 use CodeIgniter\Shield\Entities\User;
+use CodeIgniter\Shield\Authentication\Authenticators\Session;
 use App\Models\Business;
 use App\Models\RefreshToken;
+use App\Services\AuditLogService;
 use App\Services\BranchContextService;
 use CodeIgniter\Shield\Models\GroupModel;
 use CodeIgniter\Shield\Models\PermissionModel;
@@ -16,6 +19,8 @@ use DateTime;
 // $users = auth()->getProvider();
 
 class AuthController extends ResourceController {
+    use SecuresInput;
+
     private $businessModel;
     private $refreshTokenModel;
     private $UserObject;
@@ -23,6 +28,7 @@ class AuthController extends ResourceController {
     private $group;
     private $permission;
     private BranchContextService $branchContext;
+    private AuditLogService $auditLog;
 
     public function __construct() {
         $this->UserObject = new UserModel();
@@ -31,6 +37,7 @@ class AuthController extends ResourceController {
         $this->group =  new GroupModel();
         $this->permission =  new PermissionModel();
         $this->branchContext = service('branchContext');
+        $this->auditLog = new AuditLogService();
     }
 
     private function defaultAppSettings(): array
@@ -136,6 +143,10 @@ class AuthController extends ResourceController {
     
             foreach ($users as $user) {
                 // Get the groups/roles for this user ID
+                if (!$user || !method_exists($user, 'getGroups')) {
+                    continue;
+                }
+
                 $roles = $user->getGroups();
                 $permissions = $this->permission->getForUser($user);
     
@@ -157,6 +168,474 @@ class AuthController extends ResourceController {
         }
     }
 
+    private function staffAccessDenied(): ?\CodeIgniter\HTTP\ResponseInterface
+    {
+        if (!$this->branchContext->canUserSwitchBranches()) {
+            return $this->failForbidden('Only admins can manage staff accounts.');
+        }
+
+        return null;
+    }
+
+    private function identityRowsByUser(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        $rows = \Config\Database::connect()
+            ->table('auth_identities')
+            ->select('user_id, secret as email, force_reset, last_used_at')
+            ->where('type', Session::ID_TYPE_EMAIL_PASSWORD)
+            ->whereIn('user_id', $userIds)
+            ->get()
+            ->getResultArray();
+
+        $indexed = [];
+        foreach ($rows as $row) {
+            $indexed[(int) $row['user_id']] = $row;
+        }
+
+        return $indexed;
+    }
+
+    private function loginStatsByUser(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        $rows = \Config\Database::connect()
+            ->table('auth_logins')
+            ->select('user_id, COUNT(*) as login_count, MAX(date) as last_login_at')
+            ->whereIn('user_id', $userIds)
+            ->where('success', 1)
+            ->groupBy('user_id')
+            ->get()
+            ->getResultArray();
+
+        $indexed = [];
+        foreach ($rows as $row) {
+            $indexed[(int) $row['user_id']] = $row;
+        }
+
+        return $indexed;
+    }
+
+    private function auditStatsByUser(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        $db = \Config\Database::connect();
+        if (!$db->tableExists('audit_logs')) {
+            return [];
+        }
+
+        $rows = $db->table('audit_logs')
+            ->select('userId, COUNT(*) as activity_count, MAX(auditDateCreated) as last_activity_at')
+            ->whereIn('userId', $userIds)
+            ->groupBy('userId')
+            ->get()
+            ->getResultArray();
+
+        $indexed = [];
+        foreach ($rows as $row) {
+            $indexed[(int) $row['userId']] = $row;
+        }
+
+        return $indexed;
+    }
+
+    private function staffDocumentsByUser(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        $db = \Config\Database::connect();
+        if (!$db->tableExists('staff_user_documents')) {
+            return [];
+        }
+
+        $rows = $db->table('staff_user_documents')
+            ->whereIn('user_id', $userIds)
+            ->get()
+            ->getResultArray();
+
+        $indexed = [];
+        foreach ($rows as $row) {
+            $indexed[(int) $row['user_id']] = [
+                'passportPhotoPath' => $row['passport_photo_path'] ?? null,
+                'passportPhotoName' => $row['passport_photo_name'] ?? null,
+                'idDocumentPath' => $row['id_document_path'] ?? null,
+                'idDocumentName' => $row['id_document_name'] ?? null,
+                'updatedAt' => $row['updated_at'] ?? null,
+            ];
+        }
+
+        return $indexed;
+    }
+
+    private function isOnline(?string $dateTime): bool
+    {
+        if (!$dateTime) {
+            return false;
+        }
+
+        $timestamp = strtotime($dateTime);
+        return $timestamp !== false && $timestamp >= strtotime('-15 minutes');
+    }
+
+    private function formatStaffUser($user, array $identity = [], array $login = [], array $audit = [], array $documents = []): array
+    {
+        $data = $user->toArray();
+        $userId = (int) $user->id;
+        $lastSeenAt = $data['last_active'] ?? $identity['last_used_at'] ?? $login['last_login_at'] ?? null;
+        $isBanned = ($data['status'] ?? null) === 'banned';
+        $isActive = (bool) ($data['active'] ?? false);
+        $forceReset = (bool) ($identity['force_reset'] ?? false);
+
+        $accountStatus = 'active';
+        if ($isBanned) {
+            $accountStatus = 'banned';
+        } elseif (!$isActive) {
+            $accountStatus = 'inactive';
+        } elseif ($forceReset) {
+            $accountStatus = 'password_reset_required';
+        }
+
+        return array_merge($data, [
+            'id' => $userId,
+            'email' => $user->email ?? ($identity['email'] ?? null),
+            'roles' => method_exists($user, 'getGroups') ? $user->getGroups() : [],
+            'permissions' => $this->permission->getForUser($user),
+            'branchScope' => $this->branchContext->getUserScope($userId),
+            'accountStatus' => $accountStatus,
+            'isActive' => $isActive,
+            'isBanned' => $isBanned,
+            'forcePasswordReset' => $forceReset,
+            'online' => $this->isOnline($lastSeenAt),
+            'lastSeenAt' => $lastSeenAt,
+            'lastLoginAt' => $login['last_login_at'] ?? null,
+            'loginCount' => (int) ($login['login_count'] ?? 0),
+            'activityCount' => (int) ($audit['activity_count'] ?? 0),
+            'lastActivityAt' => $audit['last_activity_at'] ?? null,
+            'documents' => $documents,
+        ]);
+    }
+
+    private function staffOverviewPayload(): array
+    {
+        $users = $this->UserObject->findAll();
+        $userIds = array_map(fn($user) => (int) $user->id, $users);
+        $identities = $this->identityRowsByUser($userIds);
+        $logins = $this->loginStatsByUser($userIds);
+        $audits = $this->auditStatsByUser($userIds);
+        $documents = $this->staffDocumentsByUser($userIds);
+
+        $staff = [];
+        foreach ($users as $user) {
+            $userId = (int) $user->id;
+            $staff[] = $this->formatStaffUser(
+                $user,
+                $identities[$userId] ?? [],
+                $logins[$userId] ?? [],
+                $audits[$userId] ?? [],
+                $documents[$userId] ?? []
+            );
+        }
+
+        return [
+            'users' => $staff,
+            'summary' => [
+                'total' => count($staff),
+                'online' => count(array_filter($staff, fn($user) => (bool) $user['online'])),
+                'active' => count(array_filter($staff, fn($user) => $user['accountStatus'] === 'active')),
+                'inactive' => count(array_filter($staff, fn($user) => $user['accountStatus'] === 'inactive')),
+                'banned' => count(array_filter($staff, fn($user) => $user['accountStatus'] === 'banned')),
+                'passwordResetRequired' => count(array_filter($staff, fn($user) => (bool) $user['forcePasswordReset'])),
+            ],
+        ];
+    }
+
+    public function staffOverview()
+    {
+        if ($denied = $this->staffAccessDenied()) {
+            return $denied;
+        }
+
+        return $this->respond([
+            'status' => true,
+            'message' => 'Staff overview loaded successfully.',
+            'data' => $this->staffOverviewPayload(),
+        ]);
+    }
+
+    public function staffActivity($userId = null)
+    {
+        if ($denied = $this->staffAccessDenied()) {
+            return $denied;
+        }
+
+        $userId = (int) $userId;
+        $user = $this->UserObject->find($userId);
+        if (!$user) {
+            return $this->failNotFound('User not found.');
+        }
+
+        $db = \Config\Database::connect();
+        $activity = [];
+        if ($db->tableExists('audit_logs')) {
+            $activity = $db->table('audit_logs')
+                ->select('id, action, entityType, entityId, ipAddress, userAgent, auditDateCreated')
+                ->where('userId', $userId)
+                ->orderBy('auditDateCreated', 'DESC')
+                ->limit(30)
+                ->get()
+                ->getResultArray();
+        }
+
+        $logins = $db->table('auth_logins')
+            ->select('id, ip_address, user_agent, identifier, date, success')
+            ->groupStart()
+            ->where('user_id', $userId)
+            ->orWhere('identifier', $user->email ?? '')
+            ->groupEnd()
+            ->orderBy('date', 'DESC')
+            ->limit(15)
+            ->get()
+            ->getResultArray();
+
+        return $this->respond([
+            'status' => true,
+            'message' => 'Staff activity loaded successfully.',
+            'data' => [
+                'activity' => $activity,
+                'logins' => $logins,
+            ],
+        ]);
+    }
+
+    public function updateStaffStatus()
+    {
+        if ($denied = $this->staffAccessDenied()) {
+            return $denied;
+        }
+
+        $userId = (int) $this->request->getVar('user_id');
+        $action = strtolower(trim((string) $this->request->getVar('action')));
+        $reason = trim((string) ($this->request->getVar('reason') ?? ''));
+        $allowedActions = [
+            'activate',
+            'deactivate',
+            'ban',
+            'unban',
+            'force_password_reset',
+            'clear_password_reset',
+        ];
+
+        if (!$userId || !in_array($action, $allowedActions, true)) {
+            return $this->fail('A valid user and staff action are required.');
+        }
+
+        if (auth()->id() && (int) auth()->id() === $userId && in_array($action, ['deactivate', 'ban'], true)) {
+            return $this->fail('You cannot lock your own administrator account.');
+        }
+
+        $user = $this->UserObject->find($userId);
+        if (!$user) {
+            return $this->failNotFound('User not found.');
+        }
+
+        $before = $user->toArray();
+        $db = \Config\Database::connect();
+
+        switch ($action) {
+            case 'activate':
+                $this->UserObject->update($userId, ['active' => 1]);
+                break;
+            case 'deactivate':
+                $this->UserObject->update($userId, ['active' => 0]);
+                break;
+            case 'ban':
+                $user->ban($reason !== '' ? $reason : 'Account blocked by administrator.');
+                break;
+            case 'unban':
+                $user->unBan();
+                break;
+            case 'force_password_reset':
+            case 'clear_password_reset':
+                $db->table('auth_identities')
+                    ->where('user_id', $userId)
+                    ->where('type', Session::ID_TYPE_EMAIL_PASSWORD)
+                    ->update(['force_reset' => $action === 'force_password_reset' ? 1 : 0]);
+                break;
+        }
+
+        $after = $this->UserObject->find($userId);
+        $this->auditLog->record(
+            'staff.' . $action,
+            'user',
+            $userId,
+            $before,
+            $after ? $after->toArray() : null,
+            auth()->id() ? (int) auth()->id() : null,
+            $this->branchContext->getEffectiveBranchId(),
+            ['reason' => $reason]
+        );
+
+        return $this->respond([
+            'status' => true,
+            'message' => 'Staff account action completed successfully.',
+            'data' => $this->staffOverviewPayload(),
+        ]);
+    }
+
+    private function staffUploadDirectory(int $userId): string
+    {
+        return FCPATH . 'uploads' . DIRECTORY_SEPARATOR . 'staff-users' . DIRECTORY_SEPARATOR . $userId;
+    }
+
+    private function storeStaffFile(int $userId, string $field, array $allowedMimeTypes, int $maxBytes): ?array
+    {
+        $file = $this->request->getFile($field);
+        if (!$file || $file->getError() === UPLOAD_ERR_NO_FILE) {
+            return null;
+        }
+
+        if (!$file->isValid()) {
+            throw new \RuntimeException('The uploaded file for ' . $field . ' is not valid.');
+        }
+
+        if ($file->getSize() > $maxBytes) {
+            throw new \RuntimeException('The uploaded file for ' . $field . ' is too large.');
+        }
+
+        if (!in_array($file->getMimeType(), $allowedMimeTypes, true)) {
+            throw new \RuntimeException('The uploaded file type for ' . $field . ' is not allowed.');
+        }
+
+        $targetDirectory = $this->staffUploadDirectory($userId);
+        if (!is_dir($targetDirectory)) {
+            mkdir($targetDirectory, 0755, true);
+        }
+
+        $newName = $file->getRandomName();
+        $file->move($targetDirectory, $newName);
+
+        return [
+            'path' => 'uploads/staff-users/' . $userId . '/' . $newName,
+            'name' => $file->getClientName(),
+        ];
+    }
+
+    private function removeOldStaffFile(?string $path): void
+    {
+        if (!$path) {
+            return;
+        }
+
+        $absolutePath = realpath(FCPATH . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path));
+        $uploadsRoot = realpath(FCPATH . 'uploads' . DIRECTORY_SEPARATOR . 'staff-users');
+
+        if ($absolutePath && $uploadsRoot && str_starts_with($absolutePath, $uploadsRoot) && is_file($absolutePath)) {
+            unlink($absolutePath);
+        }
+    }
+
+    public function uploadStaffDocuments()
+    {
+        if ($denied = $this->staffAccessDenied()) {
+            return $denied;
+        }
+
+        $db = \Config\Database::connect();
+        if (!$db->tableExists('staff_user_documents')) {
+            return $this->fail('Run the staff user documents migration before uploading staff files.');
+        }
+
+        $userId = (int) $this->request->getVar('user_id');
+        $user = $this->UserObject->find($userId);
+        if (!$user) {
+            return $this->failNotFound('User not found.');
+        }
+
+        try {
+            $passportPhoto = $this->storeStaffFile(
+                $userId,
+                'passportPhoto',
+                ['image/jpeg', 'image/png', 'image/webp'],
+                2 * 1024 * 1024
+            );
+            $idDocument = $this->storeStaffFile(
+                $userId,
+                'idDocument',
+                ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+                5 * 1024 * 1024
+            );
+        } catch (\RuntimeException $exception) {
+            return $this->fail($exception->getMessage());
+        }
+
+        if (!$passportPhoto && !$idDocument) {
+            return $this->fail('Upload a passport photo, an ID document, or both.');
+        }
+
+        $existing = $db->table('staff_user_documents')->where('user_id', $userId)->get()->getRowArray();
+        $now = date('Y-m-d H:i:s');
+        $payload = [
+            'user_id' => $userId,
+            'uploaded_by' => auth()->id() ? (int) auth()->id() : null,
+            'updated_at' => $now,
+        ];
+
+        if (!$existing) {
+            $payload['created_at'] = $now;
+        }
+
+        if ($passportPhoto) {
+            $this->removeOldStaffFile($existing['passport_photo_path'] ?? null);
+            $payload['passport_photo_path'] = $passportPhoto['path'];
+            $payload['passport_photo_name'] = $passportPhoto['name'];
+        }
+
+        if ($idDocument) {
+            $this->removeOldStaffFile($existing['id_document_path'] ?? null);
+            $payload['id_document_path'] = $idDocument['path'];
+            $payload['id_document_name'] = $idDocument['name'];
+        }
+
+        $saved = $existing
+            ? $db->table('staff_user_documents')->where('user_id', $userId)->update($payload)
+            : $db->table('staff_user_documents')->insert($payload);
+
+        if (!$saved) {
+            return $this->failServerError('Staff documents could not be saved.');
+        }
+
+        $this->auditLog->record(
+            'staff.documents_uploaded',
+            'user',
+            $userId,
+            $existing ?: null,
+            $payload,
+            auth()->id() ? (int) auth()->id() : null,
+            $this->branchContext->getEffectiveBranchId(),
+            [
+                'passportPhotoUploaded' => $passportPhoto !== null,
+                'idDocumentUploaded' => $idDocument !== null,
+            ]
+        );
+
+        return $this->respond([
+            'status' => true,
+            'message' => 'Staff documents uploaded successfully.',
+            'data' => $this->staffOverviewPayload(),
+        ]);
+    }
+
     // Change password for a user by ID
 function changeUserPassword()
 {
@@ -176,10 +655,25 @@ $userId = $this->request->getVar( 'user_id' );
     // $user->save();
     // Update the password securely using Shield's Password Updater
 $passwordService = service('passwords');
-$user->password = $passwordService->hash($newPassword);
+$user->password_hash = $passwordService->hash($newPassword);
 
 // Now use the model to save the updated user
 $this->UserObject->save($user);
+\Config\Database::connect()
+    ->table('auth_identities')
+    ->where('user_id', $userId)
+    ->where('type', Session::ID_TYPE_EMAIL_PASSWORD)
+    ->update(['force_reset' => 0]);
+
+$this->auditLog->record(
+    'staff.password_changed',
+    'user',
+    $userId,
+    null,
+    ['force_reset' => 0],
+    auth()->id() ? (int) auth()->id() : null,
+    $this->branchContext->getEffectiveBranchId()
+);
     $response = [
         'status' => true,
         'message' => 'User password reset successfull',
@@ -330,7 +824,8 @@ $validatedData = $this->validator->getValidated();
         $userEntityObject = new User( [
             'username' => $this->request->getVar( 'username' ),
             'email' => $this->request->getVar( 'email' ),
-            'password' => $this->request->getVar( 'password' )
+            'password' => $this->request->getVar( 'password' ),
+            'active' => 1
         ] );
 
         // $roles = $this->request->getVar( 'roles' )??[];
@@ -397,39 +892,43 @@ foreach ($permissions as $permission) {
 
     public function uploadLogo() {
         $userId = auth()->id();
-        $logo = $this->request->getVar( 'logo' );
-        if ( isset( $logo ) ) {
-            $errors = array();
-            $file_name = $logo[ 'name' ];
-            $file_size = $logo[ 'size' ];
-            $file_tmp = $logo[ 'tmp_name' ];
-            $file_type = $logo[ 'type' ];
-            $file_ext = strtolower( end( explode( '.', $logo[ 'name' ] ) ) );
-            $file_path = 'uploads/logos/' . $file_name;
 
-            $extensions = array( 'jpeg', 'jpg', 'png' );
-
-            if ( in_array( $file_ext, $extensions ) === false ) {
-                $errors[] = 'extension not allowed, please choose a JPEG or PNG file.';
-            }
-
-            if ( $file_size > 2097152 ) {
-                $errors[] = 'File size must be exactly 2MB';
-            }
-            if ( empty( $errors ) ) {
-                move_uploaded_file( $file_tmp, $file_path );
-                $this->businessModel->set( 'busLogo', $file_path );
-                $this->businessModel->where( 'busId', $userId );
-                $logoUpdate = $this->businessModel->update();
-                if ( $logoUpdate ) {
-                    return $this->respondCreated( 'Success' );
-                } else {
-                    return $this->respondCreated( 'Data base error' );
-                }
-            } else {
-                return $this->respondCreated( $errors );
-            }
+        if (!$userId) {
+            return $this->respond(['status' => false, 'message' => 'Authentication is required.'], 401);
         }
+
+        $logo = $this->request->getFile('logo');
+
+        if (!$logo || !$logo->isValid()) {
+            return $this->respond(['status' => false, 'message' => 'A valid logo image is required.'], 422);
+        }
+
+        if ($logo->getSize() > 2 * 1024 * 1024) {
+            return $this->respond(['status' => false, 'message' => 'Logo file size must not exceed 2MB.'], 422);
+        }
+
+        $allowedMimeTypes = ['image/jpeg', 'image/png'];
+        if (!in_array($logo->getMimeType(), $allowedMimeTypes, true)) {
+            return $this->respond(['status' => false, 'message' => 'Only JPEG and PNG logo files are allowed.'], 422);
+        }
+
+        $targetDirectory = FCPATH . 'uploads' . DIRECTORY_SEPARATOR . 'logos';
+        if (!is_dir($targetDirectory)) {
+            mkdir($targetDirectory, 0755, true);
+        }
+
+        $newName = $logo->getRandomName();
+        $logo->move($targetDirectory, $newName);
+        $filePath = 'uploads/logos/' . $newName;
+
+        $this->businessModel->set('busLogo', $filePath);
+        $this->businessModel->where('busId', $userId);
+
+        if (!$this->businessModel->update()) {
+            return $this->respond(['status' => false, 'message' => 'Logo could not be saved.'], 500);
+        }
+
+        return $this->respond(['status' => true, 'message' => 'Logo uploaded successfully.', 'data' => ['path' => $filePath]]);
     }
 
     // post
@@ -680,6 +1179,7 @@ public function updateProfile()
         'busOwner',
     ];
     $updateData = array_intersect_key($updateData, array_flip($allowedProfileFields));
+    $updateData = $this->sanitizeProfilePayload($updateData);
 
     // Check if there are any fields left to update
     if (empty($updateData)) {
@@ -721,6 +1221,31 @@ public function updateProfile()
         'data'    => []
     ];
     return $this->respond($response, 500); // 500 Internal Server Error
+}
+
+private function sanitizeProfilePayload(array $updateData): array
+{
+    $textFields = [
+        'busName' => 200,
+        'busLocation' => 200,
+        'busBuilding' => 200,
+        'busNumberShop' => 100,
+        'busContactOne' => 100,
+        'busContactTwo' => 100,
+        'busOwner' => 200,
+    ];
+
+    foreach ($textFields as $field => $maxLength) {
+        if (array_key_exists($field, $updateData)) {
+            $updateData[$field] = $this->secureText($updateData[$field], $maxLength);
+        }
+    }
+
+    if (array_key_exists('busEmail', $updateData)) {
+        $updateData['busEmail'] = $this->secureEmail($updateData['busEmail']) ?? '';
+    }
+
+    return $updateData;
 }
 
     public function accessDenied() {

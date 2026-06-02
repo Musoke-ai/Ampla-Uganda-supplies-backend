@@ -62,7 +62,7 @@ class RawMaterialReportService
     private function stockRows(array $filters): array
     {
         $builder = $this->db->table('raw_materials rm')
-            ->select('rm.materialId AS material_id, rm.branchId AS branch_id, rm.materialCode AS material_code, rm.name AS material, rm.category, rm.size, rm.unitOfMeasure AS unit_of_measure, rm.Quantity AS quantity, rm.unitPrice AS unit_price, rm.reorderLevel AS reorder_level, (rm.Quantity * rm.unitPrice) AS stock_value, rm.supplier, rm.supplierContact AS supplier_contact, rm.storageLocation AS storage_location, rm.status, rm.expiry, rm.note', false)
+            ->select('rm.materialId AS material_id, rm.branchId AS branch_id, rm.materialCode AS material_code, rm.rawMaterialBarcode AS barcode, rm.name AS material, rm.category, rm.size, rm.unitOfMeasure AS unit_of_measure, rm.Quantity AS quantity, rm.unitPrice AS unit_price, rm.reorderLevel AS reorder_level, (rm.Quantity * rm.unitPrice) AS stock_value, rm.supplier, rm.supplierContact AS supplier_contact, rm.storageLocation AS storage_location, rm.status, rm.expiry, rm.note', false)
             ->orderBy('rm.name', 'ASC');
 
         $this->scope($builder, 'rm.branchId', 'raw_materials');
@@ -71,6 +71,7 @@ class RawMaterialReportService
             $builder->groupStart()
                 ->like('rm.name', $filters['search'])
                 ->orLike('rm.materialCode', $filters['search'])
+                ->orLike('rm.rawMaterialBarcode', $filters['search'])
                 ->orLike('rm.category', $filters['search'])
                 ->orLike('rm.supplier', $filters['search'])
                 ->orLike('rm.storageLocation', $filters['search'])

@@ -114,11 +114,35 @@ class CopilotContextService
     {
         $normalized = strtolower(trim($message));
 
-        if (!$this->looksLikeFollowUp($normalized) || empty($context['last_tool'])) {
+        if (empty($context['last_tool'])) {
             return null;
         }
 
         $arguments = [];
+
+        if ($this->asksForExport($normalized)) {
+            $tool = $this->exportToolForLastTool((string) $context['last_tool']);
+
+            if ($tool === null) {
+                return null;
+            }
+
+            if (!empty($context['last_period'])) {
+                $arguments['period'] = $context['last_period'];
+            }
+
+            $arguments['export_format'] = $this->exportFormatFromMessage($normalized) ?? 'pdf';
+
+            return [
+                'allowed' => true,
+                'tool' => $tool,
+                'arguments' => $arguments,
+            ];
+        }
+
+        if (!$this->looksLikeFollowUp($normalized)) {
+            return null;
+        }
 
         if (!empty($context['last_product']) && in_array($context['last_tool'], ['search_product_stock', 'search_sales_by_product'], true)) {
             $arguments['product_name'] = $context['last_product'];
@@ -144,6 +168,10 @@ class CopilotContextService
         $normalized = strtolower(trim($message));
 
         if ($normalized === '') {
+            return null;
+        }
+
+        if ($this->asksForExport($normalized)) {
             return null;
         }
 
@@ -433,6 +461,65 @@ class CopilotContextService
             'balance',
             'amount',
         ]);
+    }
+
+    private function asksForExport(string $message): bool
+    {
+        return $this->containsAny($message, [
+            'pdf',
+            'csv',
+            'download',
+            'export',
+            'file',
+            'document',
+        ]);
+    }
+
+    private function exportFormatFromMessage(string $message): ?string
+    {
+        if (preg_match('/\bpdf\b/i', $message)) {
+            return 'pdf';
+        }
+
+        if (preg_match('/\bcsv\b/i', $message)) {
+            return 'csv';
+        }
+
+        return null;
+    }
+
+    private function exportToolForLastTool(string $tool): ?string
+    {
+        $map = [
+            'get_sales_summary' => 'get_sales_report',
+            'search_sales_by_product' => 'get_sales_report',
+            'get_sales_report' => 'get_sales_report',
+            'get_sales_product_profit_report' => 'get_sales_product_profit_report',
+            'get_sales_paid_vs_credit_report' => 'get_sales_paid_vs_credit_report',
+            'get_inventory_value' => 'get_inventory_report',
+            'get_inventory_health_summary' => 'get_inventory_report',
+            'get_low_stock_products' => 'get_inventory_report',
+            'get_out_of_stock_products' => 'get_inventory_report',
+            'get_reorder_suggestions' => 'get_inventory_report',
+            'get_slow_moving_products' => 'get_inventory_report',
+            'get_overstocked_products' => 'get_inventory_report',
+            'search_product_stock' => 'get_inventory_report',
+            'get_inventory_report' => 'get_inventory_report',
+            'get_stock_movement_report' => 'get_stock_movement_report',
+            'get_customer_debt_report' => 'get_customer_debt_report',
+            'get_top_customers_by_sales' => 'get_sales_report',
+            'get_dashboard_report' => 'get_dashboard_report',
+            'get_purchase_report' => 'get_purchase_report',
+            'get_supplier_report' => 'get_supplier_report',
+            'get_raw_material_report' => 'get_raw_material_report',
+            'get_production_report' => 'get_production_report',
+            'get_expense_report' => 'get_expense_report',
+            'get_staff_report' => 'get_staff_report',
+            'get_audit_report' => 'get_audit_report',
+            'get_alert_insights' => 'get_alert_insights',
+        ];
+
+        return $map[$tool] ?? null;
     }
 
     private function looksLikeNewBusinessQuestion(string $message): bool

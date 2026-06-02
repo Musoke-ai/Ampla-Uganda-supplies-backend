@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
+use App\Controllers\Traits\SecuresInput;
 use App\Models\Inventory;
 use App\Models\Statistics;
 use App\Models\Business;
@@ -25,6 +26,8 @@ use Throwable;
 
 class Entries extends ResourceController
 {
+    use SecuresInput;
+
     /** This controller will hold the following functions
      * Check presence of administrators' data
      * Validation check
@@ -83,12 +86,15 @@ class Entries extends ResourceController
     // return resource object for validation failure
     public function validationFail()
     {
+        $errors = $this->validator ? $this->validator->getErrors() : [];
+
         $response = [
             'status' => false,
             'error' => 'validationError',
-            'message' => $this->validator->getErrors()
+            'message' => empty($errors) ? 'Invalid request.' : implode(' ', array_values($errors)),
+            'errors' => $errors,
         ];
-        return $this->respond($response);
+        return $this->respond($response, 422);
     }
 
     /**
@@ -121,7 +127,7 @@ class Entries extends ResourceController
             return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
         }
 
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
                 'error' => 'RequestMethodError',
@@ -263,27 +269,36 @@ class Entries extends ResourceController
             return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
         }
         //handle & submit stock form entries
-        if ($this->request->getMethod() === 'post') {
+        if (strtolower($this->request->getMethod()) === 'post') {
+            try {
+                $uploadedImage = $this->storeUploadedImage('item_image', 'products');
+            } catch (InvalidArgumentException $e) {
+                return $this->respond(['status' => false, 'message' => $e->getMessage()], 422);
+            } catch (RuntimeException $e) {
+                return $this->respond(['status' => false, 'message' => $e->getMessage()], 500);
+            }
+
             $stockData = [
                 'branchId' => $branchId,
-                'itemName' => $this->request->getVar('item_name'),
-                'itemCategoryId' => $this->request->getVar('item_category'),
-                'itemModel' => $this->request->getVar('item_model'),
-                'itemSku' => $this->nullableString($this->request->getVar('item_sku')),
-                'itemBarcode' => $this->nullableString($this->request->getVar('item_barcode')),
-                'itemBrand' => $this->nullableString($this->request->getVar('item_brand')),
-                'itemProductType' => $this->request->getVar('item_product_type') ?: 'purchased',
-                'itemUnit' => $this->request->getVar('item_unit') ?: 'pcs',
-                'itemSupplier' => $this->nullableString($this->request->getVar('item_supplier')),
+                'itemName' => $this->secureText($this->request->getVar('item_name'), 255),
+                'itemCategoryId' => $this->secureInt($this->request->getVar('item_category'), 0),
+                'itemModel' => $this->secureText($this->request->getVar('item_model'), 50),
+                'itemSku' => $this->secureText($this->request->getVar('item_sku'), 80, true),
+                'itemBarcode' => $this->secureText($this->request->getVar('item_barcode'), 120, true),
+                'itemImage' => $uploadedImage,
+                'itemBrand' => $this->secureText($this->request->getVar('item_brand'), 120, true),
+                'itemProductType' => $this->secureAllowed($this->request->getVar('item_product_type'), ['purchased', 'produced', 'service'], 'purchased'),
+                'itemUnit' => $this->secureText($this->request->getVar('item_unit'), 30) ?: 'pcs',
+                'itemSupplier' => $this->secureText($this->request->getVar('item_supplier'), 150, true),
                 'itemReorderLevel' => $this->optionalNumber($this->request->getVar('item_reorder_level'), 0),
-                'itemQuality' => $this->request->getVar('item_quality'),
-                'itemQuantity' => $this->request->getVar('item_quantity'),
-                'itemCondition' => $this->request->getVar('item_condition'),
-                'itemSize' => $this->request->getVar('item_size'),
+                'itemQuality' => $this->secureText($this->request->getVar('item_quality'), 50),
+                'itemQuantity' => $this->secureNonNegativeDecimal($this->request->getVar('item_quantity'), 0),
+                'itemCondition' => $this->secureText($this->request->getVar('item_condition'), 50),
+                'itemSize' => $this->secureText($this->request->getVar('item_size'), 50),
                 'itemStockPrice' => $this->optionalNumber($this->request->getVar('item_stock_price'), 0),
-                'itemLeastPrice' => $this->request->getVar('item_min_price'),
+                'itemLeastPrice' => $this->secureNonNegativeDecimal($this->request->getVar('item_min_price'), 0),
                 'itemWholesalePrice' => $this->optionalNumber($this->request->getVar('item_wholesale_price'), null),
-                'itemNotes' => $this->request->getVar('item_notes'),
+                'itemNotes' => $this->secureText($this->request->getVar('item_notes'), 1500, true) ?? 'none',
                 'itemOwner' =>  $userId
             ];
 
@@ -389,30 +404,40 @@ class Entries extends ResourceController
         }
         // in case data to update is available //&& $this->validateStockEntries('updateitem')
         else {
-            if ($this->request->getMethod() === 'post' && $this->validateStockEntries('updateitem')) {
+            if (strtolower($this->request->getMethod()) === 'post' && $this->validateStockEntries('updateitem')) {
                 $updateStock = [];
                 $stockDataUpdate = [
                     'branchId' => $branchId ?? ($data['branchId'] ?? null),
-                    'itemName' => $this->request->getVar('item_name'),
-                    'itemCategoryId' => $this->request->getVar('item_category'),
-                    'itemModel' => $this->request->getVar('item_model'),
-                    'itemSku' => $this->nullableString($this->request->getVar('item_sku')),
-                    'itemBarcode' => $this->nullableString($this->request->getVar('item_barcode')),
-                    'itemBrand' => $this->nullableString($this->request->getVar('item_brand')),
-                    'itemProductType' => $this->request->getVar('item_product_type') ?: 'purchased',
-                    'itemUnit' => $this->request->getVar('item_unit') ?: 'pcs',
-                    'itemSupplier' => $this->nullableString($this->request->getVar('item_supplier')),
+                    'itemName' => $this->secureText($this->request->getVar('item_name'), 255),
+                    'itemCategoryId' => $this->secureInt($this->request->getVar('item_category'), 0),
+                    'itemModel' => $this->secureText($this->request->getVar('item_model'), 50),
+                    'itemSku' => $this->secureText($this->request->getVar('item_sku'), 80, true),
+                    'itemBarcode' => $this->secureText($this->request->getVar('item_barcode'), 120, true),
+                    'itemBrand' => $this->secureText($this->request->getVar('item_brand'), 120, true),
+                    'itemProductType' => $this->secureAllowed($this->request->getVar('item_product_type'), ['purchased', 'produced', 'service'], 'purchased'),
+                    'itemUnit' => $this->secureText($this->request->getVar('item_unit'), 30) ?: 'pcs',
+                    'itemSupplier' => $this->secureText($this->request->getVar('item_supplier'), 150, true),
                     'itemReorderLevel' => $this->optionalNumber($this->request->getVar('item_reorder_level'), 0),
-                    'itemQuality' => $this->request->getVar('item_quality'),
-                    'itemQuantity' => $this->request->getVar('item_quantity'),
-                    'itemCondition' => $this->request->getVar('item_condition'),
-                    'itemSize' => $this->request->getVar('item_size'),
+                    'itemQuality' => $this->secureText($this->request->getVar('item_quality'), 50),
+                    'itemQuantity' => $this->secureNonNegativeDecimal($this->request->getVar('item_quantity'), 0),
+                    'itemCondition' => $this->secureText($this->request->getVar('item_condition'), 50),
+                    'itemSize' => $this->secureText($this->request->getVar('item_size'), 50),
                     'itemStockPrice' => $this->optionalNumber($this->request->getVar('item_stock_price'), 0),
-                    'itemLeastPrice' => $this->request->getVar('item_min_price'),
+                    'itemLeastPrice' => $this->secureNonNegativeDecimal($this->request->getVar('item_min_price'), 0),
                     'itemWholesalePrice' => $this->optionalNumber($this->request->getVar('item_wholesale_price'), null),
-                    'itemNotes' => $this->request->getVar('item_notes'),
+                    'itemNotes' => $this->secureText($this->request->getVar('item_notes'), 1500, true) ?? 'none',
                     'itemOwner' => $userId,
                 ];
+                try {
+                    $uploadedImage = $this->storeUploadedImage('item_image', 'products');
+                } catch (InvalidArgumentException $e) {
+                    return $this->respond(['status' => false, 'message' => $e->getMessage()], 422);
+                } catch (RuntimeException $e) {
+                    return $this->respond(['status' => false, 'message' => $e->getMessage()], 500);
+                }
+                if ($uploadedImage !== null) {
+                    $stockDataUpdate['itemImage'] = $uploadedImage;
+                }
 
                 $historyData = [
                     'branchId' => $stockDataUpdate['branchId'],
@@ -490,7 +515,7 @@ class Entries extends ResourceController
             return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
         }
 
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
                 'error' => 'RequestMethodError',
@@ -522,6 +547,13 @@ class Entries extends ResourceController
 
             if ($calculation['dueAmount'] > 0 && empty($calculation['custId'])) {
                 throw new InvalidArgumentException('A customer is required when a sale has an outstanding balance.');
+            }
+
+            if (
+                empty($calculation['custId'])
+                && strtolower((string) ($calculation['paymentMethod'] ?? '')) === 'credit'
+            ) {
+                throw new InvalidArgumentException('Walk-in customers cannot use credit sales. Collect full payment or select a registered customer.');
             }
 
             if ($calculation['dueAmount'] > 0 && !$this->debtSalesAllowedForBranch($branchId)) {
@@ -929,7 +961,7 @@ class Entries extends ResourceController
             return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
         }
 
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond(['status' => false, 'message' => 'Only POST requests can create debts.'], 405);
         }
 
@@ -1476,7 +1508,7 @@ class Entries extends ResourceController
     // Example controller method for image upload
     public function uploadProfileImage()
     {
-        if ($this->request->getMethod() === 'post') {
+        if (strtolower($this->request->getMethod()) === 'post') {
             $file = $this->request->getFile('file'); // Get the uploaded file
 
             if ($file->isValid() && $file->getClientMimeType() === 'image/jpeg') {
@@ -1513,7 +1545,7 @@ class Entries extends ResourceController
                     'label' => 'Item Category'
                 ],
                 'item_model' => [
-                    'rules' => 'max_length[50]|trim|min_length[2]',
+                    'rules' => 'permit_empty|max_length[50]|trim|min_length[2]',
                     'label' => 'Item Model'
                 ],
                 'item_sku' => [
@@ -1557,7 +1589,7 @@ class Entries extends ResourceController
                     'label' => 'Item Condition'
                 ],
                 'item_size' => [
-                    'rules' => 'max_length[50]|trim|min_length[1]',
+                    'rules' => 'permit_empty|max_length[50]|trim|min_length[1]',
                     'label' => 'Item Size'
                 ],
                 // 'item_buy_price' => [
@@ -1577,7 +1609,7 @@ class Entries extends ResourceController
                     'label' => 'Wholesale Price'
                 ],
                 'item_notes' => [
-                    'rules' => 'max_length[1500]|min_length[3]|trim',
+                    'rules' => 'permit_empty|max_length[1500]|min_length[3]|trim',
                     'label' => 'Item Notes'
                 ],
                 'item_owner' => [
@@ -1601,7 +1633,7 @@ class Entries extends ResourceController
                     'label' => 'Item Category'
                 ],
                 'item_model' => [
-                    'rules' => 'max_length[50]|trim|min_length[2]',
+                    'rules' => 'permit_empty|max_length[50]|trim|min_length[2]',
                     'label' => 'Item Model'
                 ],
                 'item_sku' => [
@@ -1633,19 +1665,19 @@ class Entries extends ResourceController
                     'label' => 'Reorder Level'
                 ],
                 'item_quality' => [
-                    'rules' => 'max_length[50]|trim',
+                    'rules' => 'permit_empty|max_length[50]|trim',
                     'label' => 'Item Quality'
                 ],
                 'item_quantity' => [
-                    'rules' => 'numeric|max_length[11]|trim|min_length[1]',
+                    'rules' => 'permit_empty|numeric|max_length[11]|trim|min_length[1]',
                     'label' => 'Item Quantity'
                 ],
                 'item_condition' => [
-                    'rules' => 'max_length[50]|trim|alpha_space',
+                    'rules' => 'permit_empty|max_length[50]|trim|alpha_space',
                     'label' => 'Item Condition'
                 ],
                 'item_size' => [
-                    'rules' => 'max_length[50]|trim|min_length[1]',
+                    'rules' => 'permit_empty|max_length[50]|trim|min_length[1]',
                     'label' => 'Item Size'
                 ],
                 'item_min_price' => [
@@ -1661,7 +1693,7 @@ class Entries extends ResourceController
                     'label' => 'Wholesale Price'
                 ],
                 'item_notes' => [
-                    'rules' => 'max_length[1500]|min_length[3]|trim',
+                    'rules' => 'permit_empty|max_length[1500]|min_length[3]|trim',
                     'label' => 'Item Notes'
                 ]
             ]);
@@ -1711,10 +1743,38 @@ class Entries extends ResourceController
 
     private function optionalNumber($value, $fallback)
     {
-        if ($value === null || $value === '') {
-            return $fallback;
+        return $this->secureDecimal($value, $fallback);
+    }
+
+    private function storeUploadedImage(string $field, string $folder): ?string
+    {
+        $file = $this->request->getFile($field);
+
+        if (!$file || $file->getError() === UPLOAD_ERR_NO_FILE) {
+            return null;
         }
 
-        return is_numeric($value) ? $value : $fallback;
+        if (!$file->isValid()) {
+            throw new InvalidArgumentException('The uploaded image is not valid.');
+        }
+
+        if ($file->getSize() > 3 * 1024 * 1024) {
+            throw new InvalidArgumentException('Product images must be 3MB or smaller.');
+        }
+
+        $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!in_array($file->getMimeType(), $allowedMimeTypes, true)) {
+            throw new InvalidArgumentException('Only JPEG, PNG, and WEBP images are allowed.');
+        }
+
+        $targetDirectory = FCPATH . 'uploads' . DIRECTORY_SEPARATOR . $folder;
+        if (!is_dir($targetDirectory) && !mkdir($targetDirectory, 0775, true) && !is_dir($targetDirectory)) {
+            throw new RuntimeException('Could not prepare the image upload folder.');
+        }
+
+        $newName = $file->getRandomName();
+        $file->move($targetDirectory, $newName);
+
+        return 'uploads/' . $folder . '/' . $newName;
     }
 }

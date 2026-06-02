@@ -70,6 +70,7 @@ class SalesReportService
 
         $this->activeOnly($builder);
         $this->scopeSales($builder);
+        $this->applyCommonFilters($builder, $filters);
 
         if ($filters['search'] !== '') {
             $builder->groupStart()
@@ -157,12 +158,14 @@ class SalesReportService
         $builder = $this->db->table('receipt r')
             ->select('r.SR_ID, r.paymentMethod, COALESCE(r.discount, 0) AS discount, COALESCE(r.amountPaid, 0) AS amountPaid, COALESCE(r.dueAmount, 0) AS dueAmount, SUM(s.saleQuantity * s.salePrice) AS grossSales, SUM(COALESCE(s.lineCostAtSale, 0)) AS totalCostAtSale, COUNT(s.saleId) AS lineCount, SUM(CASE WHEN s.lineCostAtSale IS NOT NULL THEN 1 ELSE 0 END) AS costedLineCount', false)
             ->join('sales s', 's.SR_ID = r.SR_ID')
+            ->join('inventory i', 'i.itemId = s.saleItemId', 'left')
             ->where('r.srDateCreated >=', $filters['from'])
             ->where('r.srDateCreated <=', $filters['to'])
             ->groupBy('r.SR_ID, r.paymentMethod, r.discount, r.amountPaid, r.dueAmount');
 
         $this->activeOnly($builder);
         $this->scopeSales($builder);
+        $this->applyCommonFilters($builder, $filters);
 
         return $builder->get()->getResultArray();
     }
@@ -172,6 +175,7 @@ class SalesReportService
         $builder = $this->db->table('receipt r')
             ->select('DATE(r.srDateCreated) AS label, SUM(s.saleQuantity * s.salePrice) AS value', false)
             ->join('sales s', 's.SR_ID = r.SR_ID')
+            ->join('inventory i', 'i.itemId = s.saleItemId', 'left')
             ->where('r.srDateCreated >=', $filters['from'])
             ->where('r.srDateCreated <=', $filters['to'])
             ->groupBy('DATE(r.srDateCreated)')
@@ -179,6 +183,7 @@ class SalesReportService
 
         $this->activeOnly($builder);
         $this->scopeSales($builder);
+        $this->applyCommonFilters($builder, $filters);
 
         return $builder->get()->getResultArray();
     }
@@ -197,6 +202,7 @@ class SalesReportService
 
         $this->activeOnly($builder);
         $this->scopeSales($builder);
+        $this->applyCommonFilters($builder, $filters);
 
         return $builder->get()->getResultArray();
     }
@@ -295,6 +301,7 @@ class SalesReportService
         $builder = $this->db->table('receipt r')
             ->select('r.SR_ID AS receipt_id, r.timeStamp AS receipt_code, r.srDateCreated AS sale_date, r.paymentMethod AS payment_method, COALESCE(r.discount, 0) AS discount, COALESCE(r.amountPaid, 0) AS amount_paid, COALESCE(r.dueAmount, 0) AS due_amount, SUM(s.saleQuantity * s.salePrice) AS gross_sales, MAX(c.custName) AS customer_name, COUNT(s.saleId) AS line_count', false)
             ->join('sales s', 's.SR_ID = r.SR_ID')
+            ->join('inventory i', 'i.itemId = s.saleItemId', 'left')
             ->join('customers c', 'c.custId = s.custId', 'left')
             ->where('r.srDateCreated >=', $filters['from'])
             ->where('r.srDateCreated <=', $filters['to'])
@@ -303,6 +310,7 @@ class SalesReportService
 
         $this->activeOnly($builder);
         $this->scopeSales($builder);
+        $this->applyCommonFilters($builder, $filters);
 
         if (!empty($filters['payment_method'])) {
             $builder->where('r.paymentMethod', $filters['payment_method']);
@@ -462,6 +470,7 @@ class SalesReportService
 
         $this->activeOnly($builder);
         $this->scopeSales($builder);
+        $this->applyCommonFilters($builder, $filters);
 
         if (!empty($filters['product_id'])) {
             $builder->where('s.saleItemId', $filters['product_id']);
@@ -629,6 +638,25 @@ class SalesReportService
 
         if ($branchId !== null) {
             $builder->where('s.branchId', $branchId);
+        }
+    }
+
+    private function applyCommonFilters($builder, array $filters): void
+    {
+        if (!empty($filters['product_id'])) {
+            $builder->where('s.saleItemId', $filters['product_id']);
+        }
+
+        if (!empty($filters['category_id'])) {
+            $builder->where('i.itemCategoryId', $filters['category_id']);
+        }
+
+        if (!empty($filters['customer_id'])) {
+            $builder->where('s.custId', $filters['customer_id']);
+        }
+
+        if (!empty($filters['payment_method'])) {
+            $builder->where('r.paymentMethod', $filters['payment_method']);
         }
     }
 }

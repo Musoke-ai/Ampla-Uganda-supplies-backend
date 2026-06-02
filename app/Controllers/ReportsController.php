@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Services\Reports\AlertInsightService;
 use App\Services\Reports\AuditReportService;
+use App\Services\Reports\CashBookReportService;
 use App\Services\Reports\CustomerReportService;
 use App\Services\Reports\DashboardReportService;
 use App\Services\Reports\ExpenseReportService;
@@ -93,6 +94,19 @@ class ReportsController extends ResourceController
             $data = (new SalesReportService())->paidVsCredit($filters);
 
             return $this->respond($this->success('sales.paid_vs_credit', $data, $filters, $data['accuracyNotes'] ?? []));
+        });
+    }
+
+    public function cashBook()
+    {
+        if ($denied = $this->permissions->assertCan('reports.finance.view')) {
+            return $this->respond($denied, 403);
+        }
+
+        return $this->withFilters(function (array $filters) {
+            $data = (new CashBookReportService())->build($filters);
+
+            return $this->respond($this->success('finance.daily_cash_book', $data, $filters, $data['accuracyNotes'] ?? []));
         });
     }
 

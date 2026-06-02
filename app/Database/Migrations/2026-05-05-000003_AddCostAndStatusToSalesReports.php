@@ -6,131 +6,131 @@ use CodeIgniter\Database\Migration;
 
 class AddCostAndStatusToSalesReports extends Migration
 {
+    protected function addColumnIfMissing(string $table, string $column, array $attributes, ?string $after = null): void
+    {
+        if ($this->db->fieldExists($column, $table)) {
+            return;
+        }
+
+        if ($after !== null && !$this->db->fieldExists($after, $table)) {
+            unset($attributes['after']);
+        }
+
+        $this->forge->addColumn($table, [
+            $column => $attributes,
+        ]);
+    }
+
+    protected function addKeyIfColumnsExist(string $table, array $columns): void
+    {
+        foreach ($columns as $column) {
+            if (!$this->db->fieldExists($column, $table)) {
+                return;
+            }
+        }
+
+        $this->forge->addKey($columns);
+    }
+
     public function up()
     {
-        if (!$this->db->fieldExists('unitCostAtSale', 'sales')) {
-            $this->forge->addColumn('sales', [
-                'unitCostAtSale' => [
-                    'type' => 'DECIMAL',
-                    'constraint' => '15,2',
-                    'null' => true,
-                    'after' => 'salePrice',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'unitCostAtSale', [
+            'type' => 'DECIMAL',
+            'constraint' => '15,2',
+            'null' => true,
+            'after' => 'salePrice',
+        ], 'salePrice');
 
-        if (!$this->db->fieldExists('lineCostAtSale', 'sales')) {
-            $this->forge->addColumn('sales', [
-                'lineCostAtSale' => [
-                    'type' => 'DECIMAL',
-                    'constraint' => '15,2',
-                    'null' => true,
-                    'after' => 'unitCostAtSale',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'lineCostAtSale', [
+            'type' => 'DECIMAL',
+            'constraint' => '15,2',
+            'null' => true,
+            'after' => 'unitCostAtSale',
+        ], 'unitCostAtSale');
 
-        if (!$this->db->fieldExists('saleStatus', 'sales')) {
-            $this->forge->addColumn('sales', [
-                'saleStatus' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => 30,
-                    'default' => 'completed',
-                    'after' => 'custId',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'custId', [
+            'type' => 'INT',
+            'constraint' => 11,
+            'null' => true,
+            'after' => 'saleOwner',
+        ], 'saleOwner');
 
-        if (!$this->db->fieldExists('cancelledAt', 'sales')) {
-            $this->forge->addColumn('sales', [
-                'cancelledAt' => [
-                    'type' => 'DATETIME',
-                    'null' => true,
-                    'after' => 'saleStatus',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'SR_ID', [
+            'type' => 'INT',
+            'constraint' => 11,
+            'null' => true,
+            'after' => 'custId',
+        ], 'custId');
 
-        if (!$this->db->fieldExists('cancelledBy', 'sales')) {
-            $this->forge->addColumn('sales', [
-                'cancelledBy' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'unsigned' => true,
-                    'null' => true,
-                    'after' => 'cancelledAt',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'saleStatus', [
+            'type' => 'VARCHAR',
+            'constraint' => 30,
+            'default' => 'completed',
+            'after' => 'custId',
+        ], 'custId');
 
-        if (!$this->db->fieldExists('branchId', 'receipt')) {
-            $this->forge->addColumn('receipt', [
-                'branchId' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'unsigned' => true,
-                    'null' => true,
-                    'after' => 'SR_ID',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'cancelledAt', [
+            'type' => 'DATETIME',
+            'null' => true,
+            'after' => 'saleStatus',
+        ], 'saleStatus');
 
-        if (!$this->db->fieldExists('createdBy', 'receipt')) {
-            $this->forge->addColumn('receipt', [
-                'createdBy' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'unsigned' => true,
-                    'null' => true,
-                    'after' => 'branchId',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('sales', 'cancelledBy', [
+            'type' => 'INT',
+            'constraint' => 11,
+            'unsigned' => true,
+            'null' => true,
+            'after' => 'cancelledAt',
+        ], 'cancelledAt');
 
-        if (!$this->db->fieldExists('receiptStatus', 'receipt')) {
-            $this->forge->addColumn('receipt', [
-                'receiptStatus' => [
-                    'type' => 'VARCHAR',
-                    'constraint' => 30,
-                    'default' => 'completed',
-                    'after' => 'amountPaid',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('receipt', 'branchId', [
+            'type' => 'INT',
+            'constraint' => 11,
+            'unsigned' => true,
+            'null' => true,
+            'after' => 'SR_ID',
+        ], 'SR_ID');
 
-        if (!$this->db->fieldExists('cancelledAt', 'receipt')) {
-            $this->forge->addColumn('receipt', [
-                'cancelledAt' => [
-                    'type' => 'DATETIME',
-                    'null' => true,
-                    'after' => 'receiptStatus',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('receipt', 'createdBy', [
+            'type' => 'INT',
+            'constraint' => 11,
+            'unsigned' => true,
+            'null' => true,
+            'after' => 'branchId',
+        ], 'branchId');
 
-        if (!$this->db->fieldExists('cancelledBy', 'receipt')) {
-            $this->forge->addColumn('receipt', [
-                'cancelledBy' => [
-                    'type' => 'INT',
-                    'constraint' => 11,
-                    'unsigned' => true,
-                    'null' => true,
-                    'after' => 'cancelledAt',
-                ],
-            ]);
-        }
+        $this->addColumnIfMissing('receipt', 'receiptStatus', [
+            'type' => 'VARCHAR',
+            'constraint' => 30,
+            'default' => 'completed',
+            'after' => 'amountPaid',
+        ], 'amountPaid');
 
-        $this->forge->addKey(['branchId', 'saleStatus', 'saleDateCreated']);
-        $this->forge->addKey(['SR_ID', 'saleStatus']);
+        $this->addColumnIfMissing('receipt', 'cancelledAt', [
+            'type' => 'DATETIME',
+            'null' => true,
+            'after' => 'receiptStatus',
+        ], 'receiptStatus');
+
+        $this->addColumnIfMissing('receipt', 'cancelledBy', [
+            'type' => 'INT',
+            'constraint' => 11,
+            'unsigned' => true,
+            'null' => true,
+            'after' => 'cancelledAt',
+        ], 'cancelledAt');
+
+        $this->addKeyIfColumnsExist('sales', ['branchId', 'saleStatus', 'saleDateCreated']);
+        $this->addKeyIfColumnsExist('sales', ['SR_ID', 'saleStatus']);
         $this->forge->processIndexes('sales');
 
-        $this->forge->addKey(['branchId', 'receiptStatus', 'srDateCreated']);
+        $this->addKeyIfColumnsExist('receipt', ['branchId', 'receiptStatus', 'srDateCreated']);
         $this->forge->processIndexes('receipt');
     }
 
     public function down()
     {
-        foreach (['unitCostAtSale', 'lineCostAtSale', 'saleStatus', 'cancelledAt', 'cancelledBy'] as $column) {
+        foreach (['unitCostAtSale', 'lineCostAtSale', 'saleStatus', 'cancelledAt', 'cancelledBy', 'custId', 'SR_ID'] as $column) {
             if ($this->db->fieldExists($column, 'sales')) {
                 $this->forge->dropColumn('sales', $column);
             }

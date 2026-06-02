@@ -17,6 +17,8 @@ class RawMaterials extends Model
         'branchId',
         'name',
         'materialCode',
+        'rawMaterialBarcode',
+        'rawMaterialImage',
         'category',
         'size',
         'unitOfMeasure',

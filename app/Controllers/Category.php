@@ -51,7 +51,7 @@ class Category extends ResourceController
         //fetch categories
         $data = $this->categoryModel->findAll();
         if(empty($data)){
-            return [];
+            return $this->respond([]);
         }
         else{
             return $this->respond($data);
@@ -101,13 +101,13 @@ class Category extends ResourceController
         }
 
         //add new category
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries('create'))){
+        if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries('create'))){
             return $this->validationFail();
         }
         // in case form validation is passed
         else{
             $categoryData = [
-                'categoryName' => $this->request->getVar('category_name')
+                'categoryName' => $this->cleanCategoryName($this->request->getVar('category_name'))
             ];
 
             $saveCategoryData = $this->categoryModel->save($categoryData);
@@ -123,10 +123,12 @@ class Category extends ResourceController
             }
             // in case category created successfully
             else{
+                $categoryId = $this->categoryModel->getInsertID();
                 $response = [
                     'status' => true,
                     'error' => null,
-                    'message' => 'Success!! Category was created, items can now be added to it' 
+                    'message' => 'Success!! Category was created, items can now be added to it',
+                    'data' => $this->categoryModel->find($categoryId),
                 ];
                 return $this->respond($response);
                 exit();
@@ -173,13 +175,13 @@ class Category extends ResourceController
             return $this->nocategoriesdata();
         }
 
-        if(!($this->request->getMethod() === 'post' && $this->validateCategoryEntries('update'))){
+        if(!(strtolower($this->request->getMethod()) === 'post' && $this->validateCategoryEntries('update'))){
             return $this->validationFail();
         }
         // in case form validation fails
         else{
             $categoryUpdateData = [
-                'categoryName' => $this->request->getVar('category_name')
+                'categoryName' => $this->cleanCategoryName($this->request->getVar('category_name'))
             ];
 
             $updateCategoryData = $this->categoryModel->update($id, $categoryUpdateData);
@@ -273,10 +275,25 @@ class Category extends ResourceController
         $user = auth()->user();
         $roles = $user && method_exists($user, 'getGroups') ? $user->getGroups() : [];
 
-        if (!in_array('admin', $roles, true) && !in_array('superadmin', $roles, true)) {
+        $permissions = $user && method_exists($user, 'getPermissions') ? $user->getPermissions() : [];
+
+        if (
+            !in_array('admin', $roles, true)
+            && !in_array('superadmin', $roles, true)
+            && !in_array('categories.manage', $permissions, true)
+        ) {
             return $this->failForbidden('Only administrators can manage categories.');
         }
 
         return null;
+    }
+
+    private function cleanCategoryName($value): string
+    {
+        $value = trim((string) $value);
+        $value = strip_tags($value);
+        $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $value) ?? '';
+
+        return function_exists('mb_substr') ? mb_substr($value, 0, 50) : substr($value, 0, 50);
     }
 }

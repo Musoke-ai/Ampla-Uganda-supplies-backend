@@ -342,7 +342,7 @@ class CreateProductionBatchTables extends Migration
                 continue;
             }
 
-            if (!$this->db->fieldExists('branchId', $table)) {
+            if (!$this->columnExists($table, 'branchId')) {
                 $this->forge->addColumn($table, [
                     'branchId' => [
                         'type' => 'INT',
@@ -354,7 +354,7 @@ class CreateProductionBatchTables extends Migration
                 ]);
             }
 
-            if (!$this->db->fieldExists('batchId', $table)) {
+            if (!$this->columnExists($table, 'batchId')) {
                 $this->forge->addColumn($table, [
                     'batchId' => [
                         'type' => 'INT',
@@ -366,7 +366,7 @@ class CreateProductionBatchTables extends Migration
                 ]);
             }
 
-            if (!$this->db->fieldExists('orderId', $table)) {
+            if (!$this->columnExists($table, 'orderId')) {
                 $this->forge->addColumn($table, [
                     'orderId' => [
                         'type' => 'INT',
@@ -377,5 +377,14 @@ class CreateProductionBatchTables extends Migration
                 ]);
             }
         }
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        $safeTable = '`' . str_replace('`', '``', $table) . '`';
+
+        return $this->db
+            ->query('SHOW COLUMNS FROM ' . $safeTable . ' LIKE ' . $this->db->escape($column))
+            ->getNumRows() > 0;
     }
 }

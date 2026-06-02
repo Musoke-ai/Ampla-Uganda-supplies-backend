@@ -28,6 +28,34 @@ to your `app` folder. The affected files can be copied or merged from
 Copy `env` to `.env` and tailor for your app, specifically the baseURL
 and any database settings.
 
+### Admin provisioning for deployment pipelines
+
+You can create the first admin user from CI/CD or deployment pipelines using environment variables:
+
+```powershell
+SET ADMIN_USERNAME=admin
+SET ADMIN_EMAIL=admin@example.com
+SET ADMIN_PASSWORD=StrongPass123
+SET ADMIN_GROUP=superadmin
+SET ADMIN_FORCE=true
+php spark admin:create
+```
+
+Or on Linux/macOS:
+
+```bash
+export ADMIN_USERNAME=admin
+export ADMIN_EMAIL=admin@example.com
+export ADMIN_PASSWORD=StrongPass123
+export ADMIN_GROUP=superadmin
+export ADMIN_FORCE=true
+php spark admin:create
+```
+
+If the env vars are set in `.env` or in the process environment, the command will use them automatically and will not prompt interactively.
+
+> To use `.env` values automatically, uncomment and provide the `ADMIN_USERNAME`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` entries in `amplaerp/.env`.
+
 ## Clean Test DB Workflow
 
 To verify that the backend can build its schema from migrations without touching your current database, use the helper script:

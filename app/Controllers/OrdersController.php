@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
+use App\Controllers\Traits\SecuresInput;
 use App\Models\Orders;
 use App\Models\CustomerModel;
 use App\Models\Inventory;
@@ -12,6 +13,8 @@ use function PHPUnit\Framework\isEmpty;
 
 class OrdersController extends ResourceController
  {
+    use SecuresInput;
+
     /** This controller holds the following functions
     = Check presence of data
     = Validation check
@@ -94,7 +97,7 @@ class OrdersController extends ResourceController
             return $this->respond(['status' => false, 'message' => 'A branch must be selected first.'], 422);
         }
         //add new order
-        if ( !( $this->request->getMethod() === 'post' ) ) {
+        if ( !( strtolower($this->request->getMethod()) === 'post' ) ) {
             return $this->validationFail();
         }
         // in case form validation is passed
@@ -105,15 +108,15 @@ class OrdersController extends ResourceController
 
             $orderData = [
                 'branchId' => $branchId,
-                'custId' => $this->request->getVar( 'custId' ),
-                'prodId' => $this->request->getVar( 'prodId' ),
-                'customSize' => $this->request->getVar( 'customSize' ),
-                'layers' => $this->request->getVar( 'layers' ),
-                'quantity' => $this->request->getVar( 'quantity' ),
-                'totalCost' => $this->request->getVar( 'totalCost' ),
-                'amountPaid' => $this->request->getVar( 'amountPaid' ),
-                'quantityProduced' => $this->request->getVar( 'quantityProduced' ),
-                'description' => $this->request->getVar( 'description' ),
+                'custId' => $this->secureInt($this->request->getVar( 'custId' ), 0),
+                'prodId' => $this->secureInt($this->request->getVar( 'prodId' ), null),
+                'customSize' => $this->secureText($this->request->getVar( 'customSize' ), 50, true),
+                'layers' => $this->secureInt($this->request->getVar( 'layers' ), null),
+                'quantity' => $this->secureNonNegativeDecimal($this->request->getVar( 'quantity' ), 0),
+                'totalCost' => $this->secureNonNegativeDecimal($this->request->getVar( 'totalCost' ), 0),
+                'amountPaid' => $this->secureNonNegativeDecimal($this->request->getVar( 'amountPaid' ), 0),
+                'quantityProduced' => $this->secureNonNegativeDecimal($this->request->getVar( 'quantityProduced' ), 0),
+                'description' => $this->secureText($this->request->getVar( 'description' ), 250, true),
             ];
 
             $saveOrderData = $this->orderModel->save( $orderData );
@@ -161,7 +164,7 @@ class OrdersController extends ResourceController
 //         $action = trim( $this->request->getVar( 'type' ) );
 //         $data = $this->orderModel->find( $id );
 
-//         if ( !( $this->request->getMethod() === 'post' ) && $id ) {
+//         if ( !( strtolower($this->request->getMethod()) === 'post' ) && $id ) {
 //             return $this->validationFail();
 //         }
 //         // in case form validation fails
@@ -249,13 +252,13 @@ class OrdersController extends ResourceController
 public function update($i = null)
 {
     // 1. Guard Clause: Ensure the request method is POST
-    if ($this->request->getMethod() !== 'post') {
+    if (strtolower($this->request->getMethod()) !== 'post') {
         return $this->fail('Only POST requests are allowed.', 405); // 405 Method Not Allowed
     }
 
     // 2. Get and validate common inputs
      
-    $action = trim($this->request->getVar('type'));
+    $action = $this->secureAllowed($this->request->getVar('type'), ['order', 'details'], 'details');
 
     if($action !== 'order'){
         $action='details';
@@ -302,10 +305,10 @@ private function handlePaymentUpdate($order)
         return $this->fail('This order is already fully paid.', 409); // 409 Conflict
     }
 
-    $incomingPayment = $this->request->getVar('amountPaid');
+    $incomingPayment = $this->secureDecimal($this->request->getVar('amountPaid'), null);
 
     // Check 2: Validate the incoming payment amount
-    if (!is_numeric($incomingPayment) || (float)$incomingPayment <= 0) {
+    if ($incomingPayment === null || (float)$incomingPayment <= 0) {
         return $this->fail('Invalid payment amount. It must be a positive number.', 400);
     }
 
@@ -363,15 +366,15 @@ private function handleDetailsUpdate($order)
     // NOTE: Using CodeIgniter's Validation library here is highly recommended for production.
     $data = [
         'branchId'         => $branchId,
-        'custId'           => $this->request->getVar('custId'),
-        'prodId'           => $this->request->getVar('prodId'),
-        'customSize'       => $this->request->getVar('customSize'),
-        'layers'           => $this->request->getVar('layers'),
-        'quantity'         => $this->request->getVar('quantity'),
-        'totalCost'        => $this->request->getVar('totalCost'),
-        'amountPaid'       => $this->request->getVar('amountPaid'),
-        'quantityProduced' => $this->request->getVar('quantityProduced'),
-        'description'      =>      $this->request->getVar( 'description' ),
+        'custId'           => $this->secureInt($this->request->getVar('custId'), 0),
+        'prodId'           => $this->secureInt($this->request->getVar('prodId'), null),
+        'customSize'       => $this->secureText($this->request->getVar('customSize'), 50, true),
+        'layers'           => $this->secureInt($this->request->getVar('layers'), null),
+        'quantity'         => $this->secureNonNegativeDecimal($this->request->getVar('quantity'), 0),
+        'totalCost'        => $this->secureNonNegativeDecimal($this->request->getVar('totalCost'), 0),
+        'amountPaid'       => $this->secureNonNegativeDecimal($this->request->getVar('amountPaid'), 0),
+        'quantityProduced' => $this->secureNonNegativeDecimal($this->request->getVar('quantityProduced'), 0),
+        'description'      => $this->secureText($this->request->getVar( 'description' ), 250, true),
     ];
 
     // Filter out any null values so you don't overwrite existing data with nothing.

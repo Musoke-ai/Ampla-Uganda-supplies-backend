@@ -86,4 +86,14 @@ class AuthJWT extends ShieldAuthJWT
      * - Auth::RECORD_LOGIN_ATTEMPT_ALL
      */
     public int $recordLoginAttempt = Auth::RECORD_LOGIN_ATTEMPT_FAILURE;
+
+    public function __construct()
+    {
+        parent::__construct();
+
+        $secret = env('JWT_SECRET');
+        if (is_string($secret) && $secret !== '') {
+            $this->keys['default'][0]['secret'] = $secret;
+        }
+    }
 }

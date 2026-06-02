@@ -16,6 +16,9 @@ class ProductionBatchLabor extends Model
         'role',
         'hoursWorked',
         'laborCost',
+        'amountPaid',
+        'paymentStatus',
+        'paymentDate',
         'notes',
     ];
 }

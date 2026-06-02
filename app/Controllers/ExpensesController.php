@@ -3,11 +3,14 @@
 namespace App\Controllers;
 
 use App\Models\Expense;
+use App\Controllers\Traits\SecuresInput;
 use App\Services\BranchContextService;
 use CodeIgniter\RESTful\ResourceController;
 
 class ExpensesController extends ResourceController
 {
+    use SecuresInput;
+
     private Expense $expenseModel;
     private BranchContextService $branchContext;
 
@@ -41,7 +44,7 @@ class ExpensesController extends ResourceController
 
     public function addExpense()
     {
-        if ($this->request->getMethod() !== 'post') {
+        if (strtolower($this->request->getMethod()) !== 'post') {
             return $this->respond([
                 'status' => false,
                 'error' => 'RequestMethodError',
@@ -60,11 +63,11 @@ class ExpensesController extends ResourceController
 
         $data = [
             'branchId' => $branchId,
-            'category' => $this->request->getVar('category'),
-            'description' => $this->request->getVar('description'),
-            'amount' => $this->request->getVar('amount'),
-            'givenTo' => $this->request->getVar('givenTo'),
-            'remarks' => $this->request->getVar('remarks'),
+            'category' => $this->secureText($this->request->getVar('category'), 200),
+            'description' => $this->secureText($this->request->getVar('description'), 200),
+            'amount' => $this->secureNonNegativeDecimal($this->request->getVar('amount'), 0),
+            'givenTo' => $this->secureText($this->request->getVar('givenTo'), 200),
+            'remarks' => $this->secureText($this->request->getVar('remarks'), 250),
         ];
 
         if (!$this->expenseModel->insert($data)) {
@@ -135,11 +138,11 @@ class ExpensesController extends ResourceController
 
         $expenseUpdateData = [
             'branchId' => $branchId,
-            'category' => $this->request->getVar('category'),
-            'description' => $this->request->getVar('description'),
-            'amount' => $this->request->getVar('amount'),
-            'givenTo' => $this->request->getVar('givenTo'),
-            'remarks' => $this->request->getVar('remarks'),
+            'category' => $this->secureText($this->request->getVar('category'), 200),
+            'description' => $this->secureText($this->request->getVar('description'), 200),
+            'amount' => $this->secureNonNegativeDecimal($this->request->getVar('amount'), 0),
+            'givenTo' => $this->secureText($this->request->getVar('givenTo'), 200),
+            'remarks' => $this->secureText($this->request->getVar('remarks'), 250),
         ];
 
         if (!$this->expenseModel->update($id, $expenseUpdateData)) {

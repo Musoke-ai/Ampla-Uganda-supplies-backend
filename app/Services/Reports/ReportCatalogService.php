@@ -24,6 +24,7 @@ class ReportCatalogService
             $this->item('staff.worker_payments', 'Staff', 'Worker Payments Report', 'reports.staff.view', 'immediate_without_payroll_periods', 'High'),
             $this->item('suppliers.summary', 'Suppliers', 'Supplier Summary Report', 'reports.suppliers.view', 'immediate_without_supplier_ledger', 'High'),
             $this->item('suppliers.balance', 'Suppliers', 'Supplier Balance Report', 'reports.suppliers.view', 'needs_supplier_ledger', 'Critical'),
+            $this->item('finance.daily_cash_book', 'Finance', 'Daily Cash Book Report', 'reports.finance.view', 'immediate_with_receipt_caveats', 'Critical'),
             $this->item('finance.cash_received', 'Finance', 'Cash Received Report', 'reports.finance.view', 'immediate_with_receipt_caveats', 'Critical'),
             $this->item('audit.user_activity', 'Audit/Risk', 'User Activity Audit', 'reports.audit.view', 'needs_audit_logs_migration', 'High'),
             $this->item('alerts.insights', 'Alerts', 'Alerts and Insights', 'reports.alerts.view', 'immediate_for_basic_rules', 'Critical'),

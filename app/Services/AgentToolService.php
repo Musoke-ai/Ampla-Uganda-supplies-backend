@@ -294,7 +294,11 @@ class AgentToolService
                 return $this->productionService->getLowStockRawMaterials((int) ($arguments['threshold'] ?? 10));
 
             case 'get_dashboard_report':
-                return (new DashboardReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new DashboardReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'dashboard_report'
+                );
 
             case 'get_report_catalog':
                 return (new ReportCatalogService())->all();
@@ -304,58 +308,98 @@ class AgentToolService
                 $filters = $this->filtersFromArguments($arguments);
                 $report = $inventoryReport->build($filters);
                 $report['table'] = $inventoryReport->table($filters);
-                return $report;
+                return $this->withExportRequest($report, $arguments, 'inventory_report');
 
             case 'get_stock_movement_report':
-                return (new InventoryReportService())->movementReport($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new InventoryReportService())->movementReport($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'stock_movement_report'
+                );
 
             case 'get_sales_report':
                 $salesReport = new SalesReportService();
                 $filters = $this->filtersFromArguments($arguments);
                 $report = $salesReport->build($filters);
                 $report['table'] = $salesReport->table($filters);
-                return $report;
+                return $this->withExportRequest($report, $arguments, 'sales_report');
 
             case 'get_sales_product_profit_report':
-                return (new SalesReportService())->productProfit($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new SalesReportService())->productProfit($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'sales_product_profit_report'
+                );
 
             case 'get_sales_paid_vs_credit_report':
-                return (new SalesReportService())->paidVsCredit($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new SalesReportService())->paidVsCredit($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'sales_paid_vs_credit_report'
+                );
 
             case 'get_customer_debt_report':
                 $customerReport = new CustomerReportService();
                 $filters = $this->filtersFromArguments($arguments);
                 $report = $customerReport->build($filters);
                 $report['table'] = $customerReport->table($filters);
-                return $report;
+                return $this->withExportRequest($report, $arguments, 'customer_debt_report');
 
             case 'get_purchase_report':
-                return (new PurchaseReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new PurchaseReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'purchase_report'
+                );
 
             case 'get_supplier_report':
-                return (new SupplierReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new SupplierReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'supplier_report'
+                );
 
             case 'get_raw_material_report':
-                return (new RawMaterialReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new RawMaterialReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'raw_material_report'
+                );
 
             case 'get_production_report':
-                return (new ProductionReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new ProductionReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'production_report'
+                );
 
             case 'get_expense_report':
                 $expenseReport = new ExpenseReportService();
                 $filters = $this->filtersFromArguments($arguments);
                 $report = $expenseReport->build($filters);
                 $report['table'] = $expenseReport->table($filters);
-                return $report;
+                return $this->withExportRequest($report, $arguments, 'expense_report');
 
             case 'get_staff_report':
-                return (new StaffReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new StaffReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'staff_report'
+                );
 
             case 'get_audit_report':
-                return (new AuditReportService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new AuditReportService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'audit_report'
+                );
 
             case 'get_alert_insights':
-                return (new AlertInsightService())->build($this->filtersFromArguments($arguments));
+                return $this->withExportRequest(
+                    (new AlertInsightService())->build($this->filtersFromArguments($arguments)),
+                    $arguments,
+                    'alert_insights_report'
+                );
 
             case 'draft_reorder_list':
                 return $this->draftActionService->draftReorderList((int) ($arguments['limit'] ?? 25));
@@ -520,6 +564,10 @@ class AgentToolService
             $rules['period']['allowed'] = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_quarter', 'this_year', 'custom', 'all'];
         }
 
+        if (isset($rules['export_format'])) {
+            $rules['export_format']['allowed'] = ['pdf', 'csv'];
+        }
+
         return $rules;
     }
 
@@ -533,7 +581,28 @@ class AgentToolService
             'page' => 'integer optional, default 1',
             'per_page' => 'integer optional, default 25',
             'lowStockThreshold' => 'integer optional, default 5',
+            'export_format' => 'string optional: pdf or csv',
         ];
+    }
+
+    private function withExportRequest(array $report, array $arguments, string $reportKey): array
+    {
+        $format = strtolower(trim((string) ($arguments['export_format'] ?? '')));
+
+        if ($format === '') {
+            return $report;
+        }
+
+        $report['export'] = [
+            'requested' => true,
+            'format' => $format,
+            'report_key' => $reportKey,
+            'filename' => $reportKey . '-' . date('Y-m-d') . '.' . $format,
+            'status' => 'ready_for_client_export',
+            'note' => 'Copilot prepared the report data, explanation, and export metadata. The client should show a preview before generating the downloadable file.',
+        ];
+
+        return $report;
     }
 
     private function errorResult(string $toolName, string $error, string $message, ?array $tool = null): array

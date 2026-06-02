@@ -78,8 +78,15 @@ class RawMaterialsController extends ResourceController
         if ($branchId === null) {
             return $this->respond(['status' => false, 'message' => 'Select a current branch first.'], 422);
         }
-        if($this->request->getMethod() === 'post'){
+        if(strtolower($this->request->getMethod()) === 'post'){
         $data = $this->rawMaterialPayload($branchId);
+        try {
+            $data['rawMaterialImage'] = $this->storeUploadedImage('rawMaterialImage', 'raw-materials');
+        } catch (\InvalidArgumentException $e) {
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 422);
+        } catch (\RuntimeException $e) {
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 500);
+        }
         $errors = $this->validateRawMaterialPayload($data);
 
         if (!empty($errors)) {
@@ -175,7 +182,7 @@ else{
         }
     
         // Validate input
-        if (!($this->request->getMethod() === 'post')) {
+        if (!(strtolower($this->request->getMethod()) === 'post')) {
             return $this->respond([
                 'status' => false,
                 'error' => 'validationFailed',
@@ -186,6 +193,16 @@ else{
         $rawMaterialUpdateData = $this->rawMaterialPayload(
             $this->branchContext->resolveWritableBranchId($this->request->getVar('branchId')) ?? ($rawMaterial['branchId'] ?? null)
         );
+        try {
+            $uploadedImage = $this->storeUploadedImage('rawMaterialImage', 'raw-materials');
+        } catch (\InvalidArgumentException $e) {
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 422);
+        } catch (\RuntimeException $e) {
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 500);
+        }
+        if ($uploadedImage !== null) {
+            $rawMaterialUpdateData['rawMaterialImage'] = $uploadedImage;
+        }
         $errors = $this->validateRawMaterialPayload($rawMaterialUpdateData);
 
         if (!empty($errors)) {
@@ -296,6 +313,8 @@ else{
             'branchId' => $branchId,
             'name' => $this->cleanText($this->request->getVar('name')),
             'materialCode' => $this->cleanText($this->request->getVar('materialCode'), true, true),
+            'rawMaterialBarcode' => $this->cleanText($this->request->getVar('rawMaterialBarcode'), true),
+            'rawMaterialImage' => null,
             'category' => $this->cleanText($this->request->getVar('category'), true),
             'size' => $this->cleanText($this->request->getVar('size')),
             'unitOfMeasure' => $this->cleanText($this->request->getVar('unitOfMeasure')) ?: 'pcs',
@@ -327,6 +346,7 @@ else{
 
         foreach ([
             'materialCode' => 60,
+            'rawMaterialBarcode' => 120,
             'category' => 120,
             'size' => 200,
             'unitOfMeasure' => 40,
@@ -362,7 +382,9 @@ else{
 
     private function cleanText($value, bool $nullable = false, bool $uppercase = false): ?string
     {
-        $cleaned = trim(preg_replace('/\s+/', ' ', (string) ($value ?? '')));
+        $cleaned = strip_tags((string) ($value ?? ''));
+        $cleaned = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $cleaned) ?? '';
+        $cleaned = trim(preg_replace('/\s+/', ' ', $cleaned));
 
         if ($cleaned === '') {
             return $nullable ? null : '';
@@ -385,5 +407,37 @@ else{
         $status = strtolower((string) ($value ?: 'active'));
 
         return in_array($status, $this->statusOptions, true) ? $status : 'active';
+    }
+
+    private function storeUploadedImage(string $field, string $folder): ?string
+    {
+        $file = $this->request->getFile($field);
+
+        if (!$file || $file->getError() === UPLOAD_ERR_NO_FILE) {
+            return null;
+        }
+
+        if (!$file->isValid()) {
+            throw new \InvalidArgumentException('The uploaded image is not valid.');
+        }
+
+        if ($file->getSize() > 3 * 1024 * 1024) {
+            throw new \InvalidArgumentException('Raw material images must be 3MB or smaller.');
+        }
+
+        $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!in_array($file->getMimeType(), $allowedMimeTypes, true)) {
+            throw new \InvalidArgumentException('Only JPEG, PNG, and WEBP images are allowed.');
+        }
+
+        $targetDirectory = FCPATH . 'uploads' . DIRECTORY_SEPARATOR . $folder;
+        if (!is_dir($targetDirectory) && !mkdir($targetDirectory, 0775, true) && !is_dir($targetDirectory)) {
+            throw new \RuntimeException('Could not prepare the image upload folder.');
+        }
+
+        $newName = $file->getRandomName();
+        $file->move($targetDirectory, $newName);
+
+        return 'uploads/' . $folder . '/' . $newName;
     }
 }

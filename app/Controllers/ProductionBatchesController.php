@@ -66,6 +66,10 @@ class ProductionBatchesController extends ResourceController
 
         foreach ($batches as &$batch) {
             $batch['costing'] = $this->costing((int) $batch['batchId']);
+            $batch['materials'] = $this->batchMaterials((int) $batch['batchId']);
+            $batch['labor'] = $this->batchLabor((int) $batch['batchId']);
+            $batch['expenses'] = $this->batchExpenses((int) $batch['batchId']);
+            $batch['outputs'] = $this->batchOutputs((int) $batch['batchId']);
         }
         unset($batch);
 
@@ -353,6 +357,148 @@ class ProductionBatchesController extends ResourceController
         return $this->respond(['status' => true, 'message' => 'Material usage recorded.']);
     }
 
+    public function updateMaterial()
+    {
+        $userId = (int) auth()->id();
+        $line = $this->loadLine($this->materialModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch material record not found.');
+        }
+
+        $batch = $this->loadBatch((int) $line['batchId']);
+        if (!$batch) {
+            return $this->failNotFound('Production batch not found.');
+        }
+
+        $branchId = (int) $batch['branchId'];
+        $oldMaterial = $this->rawMaterialModel->find((int) $line['materialId']);
+        $newMaterialId = (int) $this->request->getVar('materialId');
+        $newMaterial = $this->rawMaterialModel->find($newMaterialId);
+        $newQuantity = $this->number($this->request->getVar('quantity'));
+
+        if ($newQuantity <= 0) {
+            return $this->respond(['status' => false, 'message' => 'Material quantity must be greater than zero.'], 400);
+        }
+
+        if (!$oldMaterial || !$newMaterial || (int) ($newMaterial['branchId'] ?? 0) !== $branchId) {
+            return $this->respond(['status' => false, 'message' => 'Selected raw material is outside this batch branch.'], 403);
+        }
+
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            $oldQuantity = (float) ($line['quantity'] ?? 0);
+            $oldMaterialId = (int) $line['materialId'];
+
+            $db->table('raw_materials')
+                ->where('branchId', $branchId)
+                ->where('materialId', $oldMaterialId)
+                ->set('Quantity', 'Quantity + ' . $oldQuantity, false)
+                ->update();
+
+            $updated = $db->table('raw_materials')
+                ->where('branchId', $branchId)
+                ->where('materialId', $newMaterialId)
+                ->where('Quantity >=', $newQuantity)
+                ->set('Quantity', 'Quantity - ' . $newQuantity, false)
+                ->update();
+
+            if (!$updated || $db->affectedRows() !== 1) {
+                throw new RuntimeException("Insufficient stock for {$newMaterial['name']}.");
+            }
+
+            $totalCost = round((float) $newMaterial['unitPrice'] * $newQuantity, 2);
+            $this->materialModel->update((int) $line['id'], [
+                'materialId' => $newMaterialId,
+                'quantity' => $newQuantity,
+                'unitCost' => (float) $newMaterial['unitPrice'],
+                'totalCost' => $totalCost,
+                'notes' => $this->nullableString($this->request->getVar('notes')),
+            ]);
+
+            if (!empty($line['dailyRawMaterialRegisterId'])) {
+                $this->rawMaterialRegister->update((int) $line['dailyRawMaterialRegisterId'], [
+                    'materialId' => $newMaterialId,
+                    'quantity' => $newQuantity,
+                    'totalCost' => $totalCost,
+                ]);
+            }
+
+            $restoredMaterial = $this->rawMaterialModel->find($oldMaterialId);
+            $updatedMaterial = $this->rawMaterialModel->find($newMaterialId);
+            $this->stockLedger->recordRawMaterialMovement($branchId, $oldMaterialId, 'production_batch_out_reversal', $oldQuantity, 0, (float) $restoredMaterial['Quantity'], (float) $oldMaterial['unitPrice'], 'production_batch', $batch['batchId'], $batch['batchNo'], $userId);
+            $this->stockLedger->recordRawMaterialMovement($branchId, $newMaterialId, 'production_batch_out', 0, $newQuantity, (float) $updatedMaterial['Quantity'], (float) $newMaterial['unitPrice'], 'production_batch', $batch['batchId'], $batch['batchNo'], $userId);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Material update transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Production batch material update failed: ' . $e->getMessage());
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 409);
+        }
+
+        return $this->respond(['status' => true, 'message' => 'Material usage updated.']);
+    }
+
+    public function deleteMaterial()
+    {
+        $userId = (int) auth()->id();
+        $line = $this->loadLine($this->materialModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch material record not found.');
+        }
+
+        $batch = $this->loadBatch((int) $line['batchId']);
+        if (!$batch) {
+            return $this->failNotFound('Production batch not found.');
+        }
+
+        $material = $this->rawMaterialModel->find((int) $line['materialId']);
+        $branchId = (int) $batch['branchId'];
+        $quantity = (float) ($line['quantity'] ?? 0);
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            $db->table('raw_materials')
+                ->where('branchId', $branchId)
+                ->where('materialId', (int) $line['materialId'])
+                ->set('Quantity', 'Quantity + ' . $quantity, false)
+                ->update();
+
+            if (!$this->materialModel->delete((int) $line['id'])) {
+                throw new RuntimeException('Material usage could not be removed.');
+            }
+
+            if (!empty($line['dailyRawMaterialRegisterId'])) {
+                $this->rawMaterialRegister->delete((int) $line['dailyRawMaterialRegisterId']);
+            }
+
+            $updatedMaterial = $this->rawMaterialModel->find((int) $line['materialId']);
+            if ($material && $updatedMaterial) {
+                $this->stockLedger->recordRawMaterialMovement($branchId, (int) $line['materialId'], 'production_batch_out_reversal', $quantity, 0, (float) $updatedMaterial['Quantity'], (float) $material['unitPrice'], 'production_batch', $batch['batchId'], $batch['batchNo'], $userId);
+            }
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Material delete transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Production batch material delete failed: ' . $e->getMessage());
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 409);
+        }
+
+        return $this->respond(['status' => true, 'message' => 'Material usage removed and stock restored.']);
+    }
+
     public function addLabor()
     {
         $batch = $this->loadBatch((int) $this->request->getVar('batchId'));
@@ -365,17 +511,47 @@ class ProductionBatchesController extends ResourceController
             return $this->respond(['status' => false, 'message' => 'Labor cost cannot be negative.'], 400);
         }
 
-        $saved = $this->laborModel->insert([
+        $saved = $this->laborModel->insert($this->laborPayload($batch, [
             'batchId' => (int) $batch['batchId'],
             'branchId' => (int) $batch['branchId'],
-            'employeeId' => $this->optionalInt($this->request->getVar('employeeId')),
-            'role' => $this->nullableString($this->request->getVar('role')),
-            'hoursWorked' => $this->number($this->request->getVar('hoursWorked')),
             'laborCost' => $cost,
-            'notes' => $this->nullableString($this->request->getVar('notes')),
-        ]);
+        ]));
 
         return $this->respond(['status' => (bool) $saved, 'message' => $saved ? 'Labor cost added.' : 'Labor cost could not be added.']);
+    }
+
+    public function updateLabor()
+    {
+        $line = $this->loadLine($this->laborModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch labor record not found.');
+        }
+
+        $batch = $this->loadBatch((int) $line['batchId']);
+        if (!$batch) {
+            return $this->failNotFound('Production batch not found.');
+        }
+
+        $cost = $this->number($this->request->getVar('laborCost'));
+        if ($cost < 0) {
+            return $this->respond(['status' => false, 'message' => 'Labor cost cannot be negative.'], 400);
+        }
+
+        $updated = $this->laborModel->update((int) $line['id'], $this->laborPayload($batch, ['laborCost' => $cost]));
+
+        return $this->respond(['status' => (bool) $updated, 'message' => $updated ? 'Labor and payroll record updated.' : 'Labor record could not be updated.']);
+    }
+
+    public function deleteLabor()
+    {
+        $line = $this->loadLine($this->laborModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch labor record not found.');
+        }
+
+        $deleted = $this->laborModel->delete((int) $line['id']);
+
+        return $this->respond(['status' => (bool) $deleted, 'message' => $deleted ? 'Labor and payroll record removed.' : 'Labor record could not be removed.']);
     }
 
     public function addExpense()
@@ -399,6 +575,44 @@ class ProductionBatchesController extends ResourceController
         ]);
 
         return $this->respond(['status' => (bool) $saved, 'message' => $saved ? 'Production expense added.' : 'Production expense could not be added.']);
+    }
+
+    public function updateExpense()
+    {
+        $line = $this->loadLine($this->expenseModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch expense record not found.');
+        }
+
+        $batch = $this->loadBatch((int) $line['batchId']);
+        if (!$batch) {
+            return $this->failNotFound('Production batch not found.');
+        }
+
+        $amount = $this->number($this->request->getVar('amount'));
+        if ($amount < 0) {
+            return $this->respond(['status' => false, 'message' => 'Expense amount cannot be negative.'], 400);
+        }
+
+        $updated = $this->expenseModel->update((int) $line['id'], [
+            'category' => $this->request->getVar('category') ?: 'Production',
+            'description' => $this->nullableString($this->request->getVar('description')),
+            'amount' => $amount,
+        ]);
+
+        return $this->respond(['status' => (bool) $updated, 'message' => $updated ? 'Production expense updated.' : 'Production expense could not be updated.']);
+    }
+
+    public function deleteExpense()
+    {
+        $line = $this->loadLine($this->expenseModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch expense record not found.');
+        }
+
+        $deleted = $this->expenseModel->delete((int) $line['id']);
+
+        return $this->respond(['status' => (bool) $deleted, 'message' => $deleted ? 'Production expense removed.' : 'Production expense could not be removed.']);
     }
 
     public function postOutput()
@@ -528,6 +742,169 @@ class ProductionBatchesController extends ResourceController
         return $this->respond(['status' => true, 'message' => 'Finished goods posted to inventory.']);
     }
 
+    public function updateOutput()
+    {
+        $line = $this->loadLine($this->outputModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch output record not found.');
+        }
+
+        $batch = $this->loadBatch((int) $line['batchId']);
+        if (!$batch) {
+            return $this->failNotFound('Production batch not found.');
+        }
+
+        $branchId = (int) $batch['branchId'];
+        $oldProductId = (int) $line['productId'];
+        $newProductId = (int) ($this->request->getVar('productId') ?: $oldProductId);
+        $oldQuantity = (float) ($line['quantity'] ?? 0);
+        $oldWastage = (float) ($line['wastageQuantity'] ?? 0);
+        $newQuantity = $this->number($this->request->getVar('quantity'));
+        $newWastage = $this->number($this->request->getVar('wastageQuantity'));
+        $product = $this->inventoryModel->find($newProductId);
+
+        if ($newQuantity <= 0) {
+            return $this->respond(['status' => false, 'message' => 'Produced quantity must be greater than zero.'], 400);
+        }
+
+        if (!$product || (int) ($product['branchId'] ?? 0) !== $branchId) {
+            return $this->respond(['status' => false, 'message' => 'Selected product is outside this batch branch.'], 403);
+        }
+
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            $restored = $db->table('inventory')
+                ->where('branchId', $branchId)
+                ->where('itemId', $oldProductId)
+                ->where('itemQuantity >=', $oldQuantity)
+                ->set('itemQuantity', 'itemQuantity - ' . $oldQuantity, false)
+                ->update();
+
+            if (!$restored || $db->affectedRows() !== 1) {
+                throw new RuntimeException('Could not reverse the previous finished goods quantity. Check current product stock.');
+            }
+
+            $added = $db->table('inventory')
+                ->where('branchId', $branchId)
+                ->where('itemId', $newProductId)
+                ->set('itemQuantity', 'itemQuantity + ' . $newQuantity, false)
+                ->update();
+
+            if (!$added || $db->affectedRows() !== 1) {
+                throw new RuntimeException('Could not apply the updated finished goods quantity.');
+            }
+
+            $costing = $this->costing((int) $batch['batchId']);
+            $unitCost = $newQuantity > 0 ? round(((float) $costing['totalCost']) / $newQuantity, 2) : null;
+            $this->outputModel->update((int) $line['id'], [
+                'productId' => $newProductId,
+                'quantity' => $newQuantity,
+                'wastageQuantity' => $newWastage,
+                'unitCost' => $unitCost,
+                'notes' => $this->nullableString($this->request->getVar('notes')),
+            ]);
+
+            if (!empty($line['dailyProductRegisterId'])) {
+                $quantityColumn = $db->fieldExists('Quantity', 'daily_products_register') ? 'Quantity' : 'quantity';
+                $db->table('daily_products_register')
+                    ->where('id', (int) $line['dailyProductRegisterId'])
+                    ->update([
+                        'prodId' => $newProductId,
+                        $quantityColumn => $newQuantity,
+                    ]);
+            }
+
+            $newProduced = max(0, (float) ($batch['quantityProduced'] ?? 0) - $oldQuantity + $newQuantity);
+            $newBatchWastage = max(0, (float) ($batch['wastageQuantity'] ?? 0) - $oldWastage + $newWastage);
+            $status = $newProduced >= (float) ($batch['quantityPlanned'] ?? 0) ? 'completed' : 'in_progress';
+            $this->batchModel->update($batch['batchId'], [
+                'quantityProduced' => $newProduced,
+                'wastageQuantity' => $newBatchWastage,
+                'status' => $status,
+                'endDate' => $status === 'completed' ? date('Y-m-d') : null,
+            ]);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Output update transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Production batch output update failed: ' . $e->getMessage());
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 409);
+        }
+
+        return $this->respond(['status' => true, 'message' => 'Finished goods output updated.']);
+    }
+
+    public function deleteOutput()
+    {
+        $line = $this->loadLine($this->outputModel, (int) $this->request->getVar('id'));
+        if (!$line) {
+            return $this->failNotFound('Batch output record not found.');
+        }
+
+        $batch = $this->loadBatch((int) $line['batchId']);
+        if (!$batch) {
+            return $this->failNotFound('Production batch not found.');
+        }
+
+        $branchId = (int) $batch['branchId'];
+        $quantity = (float) ($line['quantity'] ?? 0);
+        $wastage = (float) ($line['wastageQuantity'] ?? 0);
+        $db = db_connect();
+
+        try {
+            $db->transBegin();
+
+            $updated = $db->table('inventory')
+                ->where('branchId', $branchId)
+                ->where('itemId', (int) $line['productId'])
+                ->where('itemQuantity >=', $quantity)
+                ->set('itemQuantity', 'itemQuantity - ' . $quantity, false)
+                ->update();
+
+            if (!$updated || $db->affectedRows() !== 1) {
+                throw new RuntimeException('Could not reverse finished goods stock. Check current product stock.');
+            }
+
+            if (!$this->outputModel->delete((int) $line['id'])) {
+                throw new RuntimeException('Output record could not be removed.');
+            }
+
+            if (!empty($line['dailyProductRegisterId'])) {
+                $db->table('daily_products_register')
+                    ->where('id', (int) $line['dailyProductRegisterId'])
+                    ->delete();
+            }
+
+            $newProduced = max(0, (float) ($batch['quantityProduced'] ?? 0) - $quantity);
+            $newWastage = max(0, (float) ($batch['wastageQuantity'] ?? 0) - $wastage);
+            $this->batchModel->update($batch['batchId'], [
+                'quantityProduced' => $newProduced,
+                'wastageQuantity' => $newWastage,
+                'status' => $newProduced > 0 ? 'in_progress' : 'planned',
+                'endDate' => null,
+            ]);
+
+            if ($db->transStatus() === false) {
+                throw new RuntimeException('Output delete transaction failed.');
+            }
+
+            $db->transCommit();
+        } catch (Throwable $e) {
+            $db->transRollback();
+            log_message('error', 'Production batch output delete failed: ' . $e->getMessage());
+            return $this->respond(['status' => false, 'message' => $e->getMessage()], 409);
+        }
+
+        return $this->respond(['status' => true, 'message' => 'Finished goods output removed and stock reversed.']);
+    }
+
     public function updateStatus()
     {
         $batch = $this->loadBatch((int) $this->request->getVar('batchId'));
@@ -578,13 +955,55 @@ class ProductionBatchesController extends ResourceController
     private function batchDetails(int $batchId): array
     {
         $batch = $this->batchModel->find($batchId);
-        $batch['materials'] = $this->materialModel->where('batchId', $batchId)->findAll();
-        $batch['outputs'] = $this->outputModel->where('batchId', $batchId)->findAll();
-        $batch['labor'] = $this->laborModel->where('batchId', $batchId)->findAll();
-        $batch['expenses'] = $this->expenseModel->where('batchId', $batchId)->findAll();
+        $batch['materials'] = $this->batchMaterials($batchId);
+        $batch['outputs'] = $this->batchOutputs($batchId);
+        $batch['labor'] = $this->batchLabor($batchId);
+        $batch['expenses'] = $this->batchExpenses($batchId);
         $batch['costing'] = $this->costing($batchId);
 
         return $batch;
+    }
+
+    private function batchMaterials(int $batchId): array
+    {
+        return db_connect()->table('production_batch_materials pbm')
+            ->select('pbm.*, rm.name AS materialName, rm.materialCode, rm.rawMaterialBarcode, rm.unitOfMeasure')
+            ->join('raw_materials rm', 'rm.materialId = pbm.materialId', 'left')
+            ->where('pbm.batchId', $batchId)
+            ->orderBy('pbm.createdAt', 'ASC')
+            ->get()
+            ->getResultArray();
+    }
+
+    private function batchOutputs(int $batchId): array
+    {
+        return db_connect()->table('production_batch_outputs pbo')
+            ->select('pbo.*, i.itemName AS productName')
+            ->join('inventory i', 'i.itemId = pbo.productId', 'left')
+            ->where('pbo.batchId', $batchId)
+            ->orderBy('pbo.createdAt', 'ASC')
+            ->get()
+            ->getResultArray();
+    }
+
+    private function batchLabor(int $batchId): array
+    {
+        return db_connect()->table('production_batch_labor pbl')
+            ->select('pbl.*, e.empName AS employeeName')
+            ->join('employees e', 'e.empID = pbl.employeeId', 'left')
+            ->where('pbl.batchId', $batchId)
+            ->orderBy('pbl.createdAt', 'ASC')
+            ->get()
+            ->getResultArray();
+    }
+
+    private function batchExpenses(int $batchId): array
+    {
+        return db_connect()->table('production_batch_expenses')
+            ->where('batchId', $batchId)
+            ->orderBy('createdAt', 'ASC')
+            ->get()
+            ->getResultArray();
     }
 
     private function costing(int $batchId): array
@@ -632,6 +1051,71 @@ class ProductionBatchesController extends ResourceController
             || (float) ($batch['wastageQuantity'] ?? 0) > 0;
     }
 
+    private function loadLine($model, int $id): ?array
+    {
+        if ($id <= 0) {
+            return null;
+        }
+
+        $line = $model->find($id);
+        if (!$line) {
+            return null;
+        }
+
+        $batch = $this->batchModel->find((int) ($line['batchId'] ?? 0));
+        if (!$batch || !$this->branchContext->recordMatchesCurrentBranch($batch)) {
+            return null;
+        }
+
+        return $line;
+    }
+
+    private function laborPayload(array $batch, array $overrides = []): array
+    {
+        $payload = array_merge([
+            'batchId' => (int) $batch['batchId'],
+            'branchId' => (int) $batch['branchId'],
+            'employeeId' => $this->optionalInt($this->request->getVar('employeeId')),
+            'role' => $this->nullableString($this->request->getVar('role')),
+            'hoursWorked' => $this->number($this->request->getVar('hoursWorked')),
+            'laborCost' => $this->number($this->request->getVar('laborCost')),
+            'notes' => $this->nullableString($this->request->getVar('notes')),
+        ], $overrides);
+
+        if ($this->tableColumnExists('production_batch_labor', 'amountPaid')) {
+            $payload['amountPaid'] = $this->number($this->request->getVar('amountPaid'));
+        }
+
+        if ($this->tableColumnExists('production_batch_labor', 'paymentStatus')) {
+            $payload['paymentStatus'] = $this->paymentStatus($this->request->getVar('paymentStatus'));
+        }
+
+        if ($this->tableColumnExists('production_batch_labor', 'paymentDate')) {
+            $payload['paymentDate'] = $this->nullableString($this->request->getVar('paymentDate'));
+        }
+
+        return $payload;
+    }
+
+    private function paymentStatus($value): string
+    {
+        $status = strtolower(trim((string) ($value ?: 'unpaid')));
+
+        return in_array($status, ['unpaid', 'partial', 'paid'], true) ? $status : 'unpaid';
+    }
+
+    private function tableColumnExists(string $table, string $column): bool
+    {
+        static $cache = [];
+        $key = $table . '.' . $column;
+
+        if (!array_key_exists($key, $cache)) {
+            $cache[$key] = db_connect()->fieldExists($column, $table);
+        }
+
+        return $cache[$key];
+    }
+
     private function makeBatchNo(): string
     {
         return 'PB-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
@@ -640,6 +1124,8 @@ class ProductionBatchesController extends ResourceController
     private function nullableString($value): ?string
     {
         $value = trim((string) $value);
+        $value = strip_tags($value);
+        $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $value) ?? '';
 
         return $value === '' ? null : $value;
     }

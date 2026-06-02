@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use CodeIgniter\RESTful\ResourceController;
+use App\Controllers\Traits\SecuresInput;
 use App\Services\AgentToolService;
 use App\Services\AuditLogService;
 use App\Services\CopilotContextService;
@@ -13,12 +14,14 @@ use App\Services\Reports\ReportFilterService;
 
 class AgentController extends ResourceController
 {
+    use SecuresInput;
+
     private const AGENT_NAME = 'Ampla Copilot';
 
     public function chat()
     {
         $data = $this->request->getJSON(true);
-        $message = trim($data['message'] ?? '');
+        $message = $this->secureText($data['message'] ?? '', 2000);
 
         if ($message === '') {
             return $this->failValidationErrors('Message is required');
@@ -141,6 +144,7 @@ class AgentController extends ResourceController
                 ],
                 'record_count' => $toolResult['record_count'] ?? 0,
                 'records' => $toolResult['records'] ?? [],
+                'export' => $this->exportMetadata($toolResult),
                 'answer' => $answer,
                 'needs_confirmation' => ($toolResult['risk'] ?? 'read') === 'draft',
                 'confirmation' => $this->confirmationMetadata($toolResult),
@@ -162,6 +166,107 @@ class AgentController extends ResourceController
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function help()
+    {
+        $data = $this->request->getJSON(true);
+        $question = $this->secureText($data['question'] ?? ($data['message'] ?? ''), 1200);
+        $role = $this->secureText($data['role'] ?? 'general user', 120);
+        $module = $this->secureText($data['module'] ?? 'general operations', 120);
+        $page = $this->secureText($data['page'] ?? '', 160);
+        $sessionId = $this->secureText($data['session_id'] ?? '', 160);
+        $conversation = $this->helpConversationContext($data['conversation'] ?? []);
+
+        if ($question === '') {
+            return $this->failValidationErrors('Question is required');
+        }
+
+        $prompt = "
+Role:
+{$role}
+
+Current help topic:
+{$module}
+
+Current page:
+{$page}
+
+Help session:
+{$sessionId}
+
+Recent conversation:
+{$conversation}
+
+User question:
+{$question}
+
+Ampla system operations guide:
+" . $this->helpGuideContext() . "
+
+Instructions:
+- Answer as a practical in-app trainer for Ampla Uganda Supplies.
+- Sound warm, natural, and human, like a helpful supervisor standing beside the user.
+- Tailor the answer to the user's role and module access.
+- Use the current page and topic to make the guidance feel specific.
+- Use the recent conversation to understand follow-up questions naturally.
+- Give step-by-step guidance when the user asks how to do something.
+- Mention important checks, approvals, and common mistakes.
+- If a request requires live figures, tell the user to ask Ampla Copilot in the Assistant workspace or open the relevant report.
+- Do not invent menu names outside the supplied guide.
+- Keep the answer concise, direct, and easy to act on.
+";
+
+        try {
+            return $this->respond([
+                'status' => true,
+                'agent_name' => self::AGENT_NAME,
+                'role' => $role,
+                'module' => $module,
+                'page' => $page,
+                'session_id' => $sessionId,
+                'answer' => $this->askGroq(
+                    $prompt,
+                    'You are Ampla Copilot in training/help mode. Teach users how to operate the Ampla ERP from the supplied guide only. Be practical, calm, and conversational.'
+                ),
+            ]);
+        } catch (\Throwable $e) {
+            log_message('error', 'Agent help failed: ' . $e->getMessage());
+
+            return $this->respond([
+                'status' => false,
+                'message' => 'Help assistant failed',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    private function helpConversationContext($conversation): string
+    {
+        if (!is_array($conversation)) {
+            return 'No previous help messages in this session.';
+        }
+
+        $lines = [];
+        $recentMessages = array_slice($conversation, -10);
+
+        foreach ($recentMessages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = strtolower((string) ($message['role'] ?? 'user'));
+            $label = $role === 'assistant' ? 'Guide' : 'User';
+            $text = $this->secureText($message['text'] ?? '', 700);
+
+            if ($text === '') {
+                continue;
+            }
+
+            $lines[] = $label . ': ' . $text;
+        }
+
+        return $lines ? implode("\n", $lines) : 'No previous help messages in this session.';
     }
 
     public function draft(string $draftKey = '')
@@ -636,6 +741,7 @@ Instructions:
 - Give useful business recommendations where possible.
 - If the question is about customers, sales, production, or raw materials, answer in that business context.
 - For customer debt reports, use nextDueDate, latestDueDate, and overdueBalance when present. If a due date is present, state when payment is expected. Only say the due date is missing when those fields are empty or null.
+- If the database result includes an export block, say the report preview is ready and the user can download the requested file from the preview. Do not claim the file was downloaded already.
 - If this is a draft action, clearly say it is only a draft and no ERP records, stock, sale, invoice, SMS, or email have been posted.
 ";
 
@@ -692,6 +798,25 @@ Instructions:
 
             return 'I can answer this from the previous Copilot result, but I failed to generate a detailed summary. Please review the returned previous records.';
         }
+    }
+
+    private function helpGuideContext(): string
+    {
+        return <<<'GUIDE'
+Core setup: administrators configure business profile, branches, users, roles, permissions, currency, thresholds, and system settings before daily work starts.
+Branch control: users should confirm the active branch scope before creating products, raw materials, sales, production batches, customers, expenses, or reports.
+Products and inventory: product users maintain categories, product names, cost prices, selling prices, reorder levels, stock counts, and stock entries. Stock changes should match physical movement and should be reviewed before corrections.
+Sales desk: sales users search products, confirm quantity and price, choose payment type, capture customer details for credit sales, complete the sale, and issue the receipt. Credit sales must be linked to a customer and payments should be recorded promptly.
+Customers and debts: customer/accounting users create customer profiles, review balances, follow up outstanding debt, record debt payments, and compare customer history with receipts and reports.
+Production: production users maintain raw materials and categories, create orders, register employees, create production batches, record material usage, add labor, add expenses, post finished goods, record wastage, and complete quality checks. Material usage deducts raw material stock. Output posting increases finished goods stock and calculates batch unit cost from recorded material, labor, and expense costs.
+Production statuses: batches move through planned, in_progress, quality_check, completed, and cancelled. Once materials, labor, expenses, or output exist, branch, order, and product should not be changed.
+Quality control: quality checks can be pending, approved, rework, or rejected. Users should record clear notes, checker details, defect/rework reasons, and only complete production when output and quality records are correct.
+Reports: managers and accountants select date range and branch scope, then review sales, inventory, purchases, suppliers, raw materials, production, expenses, customers, staff, audit, and alert reports. Reports should be reconciled against receipts, stock movements, and customer balances.
+Assistant workspace: users can ask live operational questions about inventory, customers, sales, production orders, raw materials, and reports. Draft actions must be reviewed and confirmed before execution.
+Daily close: teams should review low stock, record purchases, production output, sales, debt payments, expenses, stock corrections, and reports on the same day.
+Security: administrators manage access. Users should only perform actions that match their role. Sensitive settings, user permissions, deletions, and corrections require extra review.
+Common mistakes: working under the wrong branch, posting sales without customer details for credit, adding output before recording all production costs, ignoring low raw material stock, editing historical records without audit review, and using reports with the wrong date range.
+GUIDE;
     }
 
     private function askGroq(string $prompt, string $systemPrompt = ''): string
@@ -1109,38 +1234,52 @@ Instructions:
     private function extractReportArguments(string $normalized): array
     {
         if ($this->containsAny($normalized, ['today', 'todays', "today's"])) {
-            return ['period' => 'today'];
+            return $this->withExportArgument($normalized, ['period' => 'today']);
         }
 
         if (str_contains($normalized, 'yesterday')) {
-            return ['period' => 'yesterday'];
+            return $this->withExportArgument($normalized, ['period' => 'yesterday']);
         }
 
         if (str_contains($normalized, 'last week')) {
-            return ['period' => 'last_week'];
+            return $this->withExportArgument($normalized, ['period' => 'last_week']);
         }
 
         if (str_contains($normalized, 'this week')) {
-            return ['period' => 'this_week'];
+            return $this->withExportArgument($normalized, ['period' => 'this_week']);
         }
 
         if (str_contains($normalized, 'last month')) {
-            return ['period' => 'last_month'];
+            return $this->withExportArgument($normalized, ['period' => 'last_month']);
         }
 
         if (str_contains($normalized, 'this year')) {
-            return ['period' => 'this_year'];
+            return $this->withExportArgument($normalized, ['period' => 'this_year']);
         }
 
         if (str_contains($normalized, 'this quarter')) {
-            return ['period' => 'this_quarter'];
+            return $this->withExportArgument($normalized, ['period' => 'this_quarter']);
         }
 
         if (str_contains($normalized, 'this month')) {
-            return ['period' => 'this_month'];
+            return $this->withExportArgument($normalized, ['period' => 'this_month']);
         }
 
-        return [];
+        return $this->withExportArgument($normalized, []);
+    }
+
+    private function withExportArgument(string $normalized, array $arguments): array
+    {
+        if (preg_match('/\bpdf\b/i', $normalized)) {
+            $arguments['export_format'] = 'pdf';
+            return $arguments;
+        }
+
+        if (preg_match('/\bcsv\b/i', $normalized)) {
+            $arguments['export_format'] = 'csv';
+        }
+
+        return $arguments;
     }
 
     private function extractFirstNumber(string $message)
@@ -1175,6 +1314,17 @@ Instructions:
             'status' => $draft['confirmation_status'] ?? 'not_implemented',
             'note' => $draft['confirmation_note'] ?? 'Review this draft before any future execution step.',
         ];
+    }
+
+    private function exportMetadata(array $toolResult): ?array
+    {
+        $records = $toolResult['records'] ?? [];
+
+        if (is_array($records) && is_array($records['export'] ?? null)) {
+            return $records['export'];
+        }
+
+        return null;
     }
 
     private function recordCopilotEvent(string $message, array $toolResult, string $sessionKey = 'default'): bool

@@ -31,7 +31,12 @@ class SetupController extends ResourceController
 
 
      public function createAdmin() {
- 
+
+            // NOTE: This controller method is retained for legacy setup only.
+            // In an enterprise deployment, use the CLI bootstrap command instead:
+            //   php spark admin:create --username=admin --email=admin@example.com --password=StrongPass123
+            // Do not expose this route in production.
+
             // 2. Hard-coded admin details.
         // IMPORTANT: Change the password in a production environment!
         $adminData = [
@@ -47,9 +52,9 @@ class SetupController extends ResourceController
         $permission = 'admin';
 
         $userSaved = $this->UserObject->save($userEntityObject);
-       
+
         if ($userSaved) {
-          echo"User created successfully";  
+          echo"User created successfully";
 // Get the ID of the newly inserted user/admin
 $userId = $this->UserObject->getInsertID();
 
