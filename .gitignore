@@ -42,6 +42,7 @@ $RECYCLE.BIN/
 # These should never be under version control,
 # as it poses a security risk.
 .env
+.env.*
 .vagrant
 Vagrantfile
 
@@ -59,6 +60,9 @@ writable/session/*
 
 writable/uploads/*
 !writable/uploads/index.html
+writable/migration-baseline-backups/*
+!writable/migration-baseline-backups/.gitkeep
+uploads/*
 
 writable/debugbar/*
 !writable/debugbar/.gitkeep

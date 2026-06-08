@@ -54,6 +54,9 @@ class AuthController extends ResourceController {
             'sidebarColor' => '#f4faf6',
             'taxRate' => 0,
             'allowDebtSales' => true,
+            'receiptTemplate' => 'modern',
+            'receiptPaperWidth' => '80mm',
+            'receiptPrinterMode' => 'browser',
         ];
     }
 
@@ -99,6 +102,9 @@ class AuthController extends ResourceController {
     {
         $defaults = $this->defaultAppSettings();
         $notifications = ['Daily', 'Weekly', 'Monthly', 'Never'];
+        $receiptTemplates = ['modern', 'compact', 'classic'];
+        $receiptPaperWidths = ['80mm', '58mm'];
+        $receiptPrinterModes = ['browser', 'system'];
         $theme = ($settings['theme'] ?? $defaults['theme']) === 'dark' ? 'dark' : 'light';
         $currency = isset($settings['currency']) && is_string($settings['currency'])
             ? strtoupper(trim($settings['currency']))
@@ -118,6 +124,15 @@ class AuthController extends ResourceController {
             'sidebarColor' => $this->cleanColor($settings['sidebarColor'] ?? $defaults['sidebarColor'], $defaults['sidebarColor']),
             'taxRate' => $this->cleanNumber($settings['taxRate'] ?? $defaults['taxRate'], $defaults['taxRate'], 0, 100),
             'allowDebtSales' => filter_var($settings['allowDebtSales'] ?? $defaults['allowDebtSales'], FILTER_VALIDATE_BOOLEAN),
+            'receiptTemplate' => in_array($settings['receiptTemplate'] ?? '', $receiptTemplates, true)
+                ? $settings['receiptTemplate']
+                : $defaults['receiptTemplate'],
+            'receiptPaperWidth' => in_array($settings['receiptPaperWidth'] ?? '', $receiptPaperWidths, true)
+                ? $settings['receiptPaperWidth']
+                : $defaults['receiptPaperWidth'],
+            'receiptPrinterMode' => in_array($settings['receiptPrinterMode'] ?? '', $receiptPrinterModes, true)
+                ? $settings['receiptPrinterMode']
+                : $defaults['receiptPrinterMode'],
         ];
     }
 
@@ -148,6 +163,9 @@ class AuthController extends ResourceController {
                 }
 
                 $roles = $user->getGroups();
+                if ($this->userHasProtectedAccountRole($user)) {
+                    continue;
+                }
                 $permissions = $this->permission->getForUser($user);
     
                 // Build a clean array representation
@@ -175,6 +193,27 @@ class AuthController extends ResourceController {
         }
 
         return null;
+    }
+
+    private function normalizeRoleName(string $role): string
+    {
+        return str_replace([' ', '_'], '', strtolower(trim($role)));
+    }
+
+    private function userHasProtectedAccountRole($user): bool
+    {
+        if (!$user || !method_exists($user, 'getGroups')) {
+            return false;
+        }
+
+        $protectedRoles = ['admin', 'superadmin', 'developer'];
+        foreach ($user->getGroups() as $role) {
+            if (in_array($this->normalizeRoleName((string) $role), $protectedRoles, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function identityRowsByUser(array $userIds): array
@@ -337,6 +376,10 @@ class AuthController extends ResourceController {
 
         $staff = [];
         foreach ($users as $user) {
+            if ($this->userHasProtectedAccountRole($user)) {
+                continue;
+            }
+
             $userId = (int) $user->id;
             $staff[] = $this->formatStaffUser(
                 $user,
@@ -703,6 +746,10 @@ public function deleteUser()
 
     if (!$user) {
         return $this->failNotFound('User not found with the provided ID.');
+    }
+
+    if ($this->userHasProtectedAccountRole($user)) {
+        return $this->failForbidden('Administrator accounts cannot be deleted from Staff Management.');
     }
 
     // Attempt to delete the user

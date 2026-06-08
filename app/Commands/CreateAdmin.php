@@ -157,11 +157,14 @@ class CreateAdmin extends BaseCommand
                 'autoPriceDetermination' => false,
                 'lowLevelProducts'     => 10,
                 'lowLevelMaterials'    => 5,
-                'notificationFrequency' => 'daily',
+                'notificationFrequency' => 'Weekly',
                 'navbarColor'          => '#2c3e50',
                 'sidebarColor'         => '#34495e',
                 'taxRate'              => 0,
                 'allowDebtSales'       => true,
+                'receiptTemplate'      => 'modern',
+                'receiptPaperWidth'    => '80mm',
+                'receiptPrinterMode'   => 'browser',
             ]),
         ];
 

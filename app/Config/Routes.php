@@ -42,6 +42,9 @@ $routes->get('check', 'Login::checkToken');
 $routes->get('makepayment', 'PaymentController::processPayment');
 $routes->get('paymentstatus', 'PaymentController::paymentStatus');
 
+// TEMPORARY: browser migration fallback for shared hosting. Remove after running migrations.
+$routes->match(['get', 'post'], 'run-migrations', 'Migrate::index');
+
 service('auth')->routes($routes);
 
 // $routes->get('login', 'ChangePasswordController::login');
@@ -180,6 +183,14 @@ $routes->group("api", ["namespace" => "App\Controllers"], function ($routes) {
     $routes->get('retrievals/sales', 'Retrievals::getSales', ['filter' => 'jwt']);
     $routes->get('retrievals/receipts', 'Retrievals::getReceipts', ['filter' => 'jwt']);
     $routes->get('retrievals/statistics', 'Retrievals::statistics', ['filter' => 'jwt']);
+
+    // POS cash drawer
+    $routes->get('cash-drawers/active', 'CashDrawersController::active', ['filter' => 'jwt']);
+    $routes->get('cash-drawers/history', 'CashDrawersController::history', ['filter' => 'jwt']);
+    $routes->post('cash-drawers/open', 'CashDrawersController::open', ['filter' => 'jwt']);
+    $routes->post('cash-drawers/movement', 'CashDrawersController::movement', ['filter' => 'jwt']);
+    $routes->post('cash-drawers/expense', 'CashDrawersController::expense', ['filter' => 'jwt']);
+    $routes->post('cash-drawers/close', 'CashDrawersController::close', ['filter' => 'jwt']);
 
     // Backend-calculated reporting APIs
     $routes->get('reports/catalog', 'ReportsController::catalog', ['filter' => 'jwt']);

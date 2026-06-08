@@ -268,6 +268,7 @@ public function getReceipts()
             r.moreInfo,
             r.paymentMethod,
             r.receiptStatus,
+            COALESCE(u.username, CONCAT(\'User #\', r.createdBy)) AS cashierName,
             b.branchName,
             b.branchLocation,
             b.branchContact,
@@ -290,6 +291,7 @@ public function getReceipts()
         ->join('inventory i', 'i.itemId = s.saleItemId', 'left')
         ->join('customers c', 'c.custId = s.custId', 'left')
         ->join('branches b', 'b.branchId = r.branchId', 'left')
+        ->join('users u', 'u.id = r.createdBy', 'left')
         ->groupStart()
             ->where('r.receiptStatus <>', 'cancelled')
             ->orWhere('r.receiptStatus IS NULL', null, false)
@@ -333,6 +335,7 @@ public function getReceipts()
                 'branchLocation' => $row['branchLocation'] ?? '',
                 'branchContact' => $row['branchContact'] ?? '',
                 'createdBy' => isset($row['createdBy']) ? (int) $row['createdBy'] : null,
+                'cashierName' => $row['cashierName'] ?? '',
                 'customerId' => isset($row['custId']) ? (int) $row['custId'] : null,
                 'customerName' => $row['customerName'] ?: 'Walk-in Customer',
                 'customerContact' => $row['customerContact'] ?? '',

@@ -507,6 +507,16 @@ class Entries extends ResourceController
     public function saleStock($items = null)
     {
         $userId = (int) auth()->id();
+        $cashierName = 'User #' . $userId;
+        $currentUser = auth()->user();
+        if ($currentUser) {
+            $userData = method_exists($currentUser, 'toArray') ? $currentUser->toArray() : [];
+            $cashierName = $userData['username']
+                ?? $currentUser->username
+                ?? $currentUser->email
+                ?? $cashierName;
+        }
+
         $saleDetails = $this->request->getVar('saleDetails') ?? [];
         $saleDetailsArray = is_array($saleDetails) ? $saleDetails : (array) $saleDetails;
         $requestedBranchId = $this->request->getVar('branchId') ?? ($saleDetailsArray['branchId'] ?? null);
@@ -596,6 +606,7 @@ class Entries extends ResourceController
         $db = db_connect();
         $receiptNo = null;
         $saleIds = [];
+        $cashDrawer = null;
 
         try {
             $db->transBegin();
@@ -697,6 +708,17 @@ class Entries extends ResourceController
                 }
             }
 
+            $paymentMethod = strtolower((string) ($calculation['paymentMethod'] ?? ''));
+            if (str_contains($paymentMethod, 'cash') && (float) $calculation['amountPaid'] > 0) {
+                $cashDrawerController = new CashDrawersController();
+                $cashDrawer = $cashDrawerController->recordSale(
+                    $branchId,
+                    (int) $receiptNo,
+                    $userId,
+                    (float) $calculation['amountPaid']
+                );
+            }
+
             $this->recordStat(null, 'saleStock', count($calculation['lines']));
             $this->auditLog->record(
                 'sale.created',
@@ -728,6 +750,9 @@ class Entries extends ResourceController
                 'status' => true,
                 'error' => null,
                 'receiptNumber' => $receiptNo,
+                'createdBy' => $userId,
+                'cashierName' => $cashierName,
+                'cashDrawer' => $cashDrawer,
                 'calculatedTotals' => [
                     'subtotal' => $calculation['subtotal'],
                     'discount' => $calculation['discount'],
